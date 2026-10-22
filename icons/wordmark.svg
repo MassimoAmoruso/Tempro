@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 330 100" role="img" aria-label="Tempro">
-  <text x="0" y="72" font-family="'Inter Tight', 'Helvetica Neue', Arial, sans-serif" font-size="86" font-weight="800" letter-spacing="-3.4" fill="#F2F3F5">tempr</text>
-  <circle cx="284" cy="49" r="18" fill="none" stroke="#2A2D34" stroke-width="11"/>
-  <circle cx="284" cy="49" r="18" fill="none" stroke="#C6F432" stroke-width="11" stroke-linecap="round" stroke-dasharray="85 113" transform="rotate(-90 284 49)"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 306 100" role="img" aria-label="Tempro">
+  <text x="0" y="72" textLength="248" lengthAdjust="spacingAndGlyphs" font-family="'Inter Tight', 'Helvetica Neue', Arial, sans-serif" font-size="86" font-weight="800" fill="#F2F3F5">Tempr</text>
+  <circle cx="278" cy="49" r="18" fill="none" stroke="#2A2D34" stroke-width="11"/>
+  <circle cx="278" cy="49" r="18" fill="none" stroke="#C6F432" stroke-width="11" stroke-linecap="round" stroke-dasharray="85 113" transform="rotate(-90 278 49)"/>
 </svg>
