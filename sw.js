@@ -1,6 +1,6 @@
 // Service worker: rende l'app utilizzabile offline.
 // Ad ogni rilascio aggiornare VERSION per forzare il rinnovo della cache.
-const VERSION = 'timer-v1';
+const VERSION = 'tempro-v2';
 const ASSETS = [
   './',
   'index.html',
@@ -10,11 +10,19 @@ const ASSETS = [
   'js/storage.js',
   'manifest.webmanifest',
   'icons/icon.svg',
+  'icons/icon-180.png',
+  'icons/icon-192.png',
+  'icons/icon-512.png',
 ];
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  // Un file mancante non deve bloccare l'installazione: si mette in cache ciò che c'è.
+  e.waitUntil(
+    caches.open(VERSION)
+      .then(c => Promise.allSettled(ASSETS.map(a => c.add(a))))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', e => {

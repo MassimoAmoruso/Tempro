@@ -1,16 +1,18 @@
 {
-  "name": "Timer Allenamento",
-  "short_name": "Timer",
+  "name": "Tempro",
+  "short_name": "Tempro",
   "description": "Timer per allenamenti a round, entro il tempo e cronometro.",
   "lang": "it",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#262626",
-  "theme_color": "#262626",
+  "background_color": "#0E0F12",
+  "theme_color": "#0E0F12",
   "icons": [
-    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" },
-    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
   ]
 }
