@@ -25,7 +25,7 @@ const ICONS = {
   video: '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>',
 };
 
-const WORDMARK = `<span class="wordmark" role="img" aria-label="Tempro">tempr<svg aria-hidden="true" viewBox="0 0 100 100">
+const WORDMARK = `<span class="wordmark" role="img" aria-label="Tempro">Tempr<svg aria-hidden="true" viewBox="0 0 100 100">
   <circle cx="50" cy="50" r="36" fill="none" stroke="#2A2D34" stroke-width="22"/>
   <circle cx="50" cy="50" r="36" fill="none" stroke="#C6F432" stroke-width="22" stroke-linecap="round" stroke-dasharray="170 227" transform="rotate(-90 50 50)"/>
 </svg></span>`;
