@@ -46,7 +46,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .view { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
 /* --- Timer ------------------------------------------------------------ */
-.timer { padding: calc(env(safe-area-inset-top) + 10px) 20px 12px; justify-content: space-between; gap: 10px; }
+.timer { padding: calc(env(safe-area-inset-top) + 14px) 20px 12px; justify-content: space-between; gap: 10px; }
 
 .topbar { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; gap: 8px; }
 .title { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
@@ -67,13 +67,13 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
   font-size: 14px; font-weight: 700; letter-spacing: 2px; white-space: nowrap;
 }
 .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--phase); }
-.ring { position: relative; width: min(78vw, 40vh, 340px); aspect-ratio: 1; }
+.ring { position: relative; width: min(78vw, 40vh, 340px); width: min(78vw, 38svh, 340px); aspect-ratio: 1; }
 .ring svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 .ring .track { fill: none; stroke: #1C1F25; stroke-width: 16; }
 .ring .arc { fill: none; stroke: var(--phase); stroke-width: 16; stroke-linecap: round; transition: stroke .3s; }
 .ring-text { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
-#phase-time { font-size: min(21vw, 10.5vh, 92px); font-weight: 700; letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
-#phase-time.long { font-size: min(14vw, 7vh, 62px); }
+#phase-time { font-size: min(21vw, 10vh, 92px); font-size: min(21vw, 10svh, 92px); font-weight: 700; letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#phase-time.long { font-size: min(14vw, 7vh, 62px); font-size: min(14vw, 6.5svh, 62px); }
 #phase-sub { font-size: 15px; color: var(--muted); max-width: 78%; text-align: center; font-variant-numeric: tabular-nums; }
 
 .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
