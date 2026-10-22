@@ -1,5 +1,8 @@
-import { PHASES, fmt, fmtTenths, buildRoundPhases, buildCronoPhases, Sequence, TempoRunner } from './engine.js';
+import { PHASES, fmt, fmtShort, fmtTenths, buildRoundPhases, buildCronoPhases, Sequence, TempoRunner } from './engine.js';
 import * as db from './storage.js';
+import { WorkRecorder, cameraSupported, videoStore } from './recorder.js';
+import { encodeLink, decodeLink, isIosBrowser } from './share.js';
+import { seriesFor, chartSvg, formatValue, resultLine, coachMessage, stats, groupResults, dateLabel, dateTimeLabel } from './report.js';
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -7,12 +10,6 @@ const int = v => Math.max(0, parseInt(v, 10) || 0);
 const safeUrl = u => (/^https?:\/\//i.test(u || '') ? u : '');
 const safeImg = u => (/^(https?:\/\/|data:image\/)/i.test(u || '') ? u : '');
 const cssUrl = u => `url("${u.replace(/["\\\s()]/g, c => encodeURIComponent(c))}")`;
-
-// Durata compatta per i riquadri: 0:10, 1:30, 1:02:05
-function fmtShort(sec) {
-  const s = Math.max(0, Math.round(sec));
-  return s >= 3600 ? fmt(s) : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-}
 
 const ICONS = {
   play: '<svg viewBox="0 0 24 24"><path d="M7.5 4.5v15l12-7.5z" fill="currentColor"/></svg>',
@@ -64,7 +61,7 @@ const MIN = { lavoro: 1, roundPerCiclo: 1, cicli: 1, tempoTotale: 1, obiettivo: 
 const RING = 2 * Math.PI * 136;   // circonferenza dell'anello (r=136 nel viewBox 300)
 
 let settings = db.getSettings();
-let mode;            // 'round' | 'tempo' | 'cronometro' | 'sessioni'
+let mode;            // 'round' | 'tempo' | 'cronometro' | 'sessioni' | 'andamento'
 let tpl;             // modello in uso
 let runner;          // Sequence | TempoRunner
 let laps = [];       // cronometro: istanti (s) dei giri
@@ -73,6 +70,15 @@ let beepKey = null, beepSec = null;
 let sheetKind = null, sheetDismiss = null;
 let phaseType = null;
 let view = null;     // ultimo modello di vista disegnato
+
+const cam = new WorkRecorder();
+let facing = 'user';       // fotocamera scelta nell'inquadratura
+let videoUrl = null;       // anteprima del video nel pannello di salvataggio
+
+// Pannelli in attesa (valutazione, video…): si aprono uno alla volta quando non ce n'è un altro.
+const queue = [];
+let reportTab = 'miei';    // Andamento: 'miei' | 'atleti'
+let reportAtleta = null;
 
 // --- Suoni, voce, vibrazione, schermo acceso -------------------------------
 
@@ -171,26 +177,42 @@ function setPhase(type) {
 
 function loadMode(m) {
   keepAwake(false);
+  stopSession();
   mode = m;
   db.setTab(m);
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === m));
-  const sessions = m === 'sessioni';
-  $('timer-view').hidden = sessions;
-  $('sessions-view').hidden = !sessions;
-  if (sessions) { runner = null; setPhase('info'); renderSessions(); return; }
+  const timer = !!db.TYPES[m];
+  $('timer-view').hidden = !timer;
+  $('sessions-view').hidden = m !== 'sessioni';
+  $('report-view').hidden = m !== 'andamento';
+  if (!timer) {
+    runner = null;
+    setPhase('info');
+    if (m === 'sessioni') renderSessions(); else renderReport();
+    return;
+  }
   tpl = db.getTemplate(db.getSelected(m)) ?? db.newTemplate(m);
   updateMedia();
   resetRunner();
 }
 
-function resetRunner() {
+// Chiude l'allenamento in corso: salva il risultato (se c'è stato lavoro), ferma la ripresa.
+function stopSession() {
   if (sheetKind === 'reps' || sheetKind === 'summary') closeSheet();
+  if (!$('camera').hidden) { closeFraming(); cam.closeStream(); }
+  if (runner) finishSession(sessionComplete());
+  endRecording();
+}
+
+function resetRunner() {
+  stopSession();
   laps = [];
   lastIdx = -1;
   beepKey = null;
   if (tpl.tipo === 'round') runner = new Sequence(buildRoundPhases(tpl));
   else if (tpl.tipo === 'tempo') runner = new TempoRunner(tpl);
   else runner = new Sequence(buildCronoPhases(tpl));
+  runner.tpl = tpl;
   keepAwake(false);
   render();
 }
@@ -214,20 +236,55 @@ function tick() {
       runner.clock.pause();
       announce('fine');
       keepAwake(false);
+      finishSession(true);
+      endRecording();
     } else {
       if (s.idx !== lastIdx) { lastIdx = s.idx; announce(s.phase.type); }
       countdown(s.idx, s.phaseRemaining);
     }
   }
+  if (cam.active) cam.setWorking(isWorking());
+  render();
+}
+
+// Fasi in cui si registra il video: solo il lavoro vero e proprio.
+function isWorking() {
+  if (!runner) return false;
+  if (tpl.tipo === 'tempo') return runner.stato === 'lavoro' && !runner.paused;
+  if (!runner.clock.running) return false;
+  const s = runner.state();
+  return !s.done && ['lavoro', 'cronometro', 'timer'].includes(s.phase.type);
+}
+
+function notStarted() {
+  return tpl.tipo === 'tempo' ? runner.stato === 'idle' : runner.clock.ms === 0;
+}
+
+function startTimer() {
+  runner.startedAt = new Date().toISOString();
+  if (tpl.tipo === 'tempo') {
+    runner.start();
+    announce(runner.stato);
+  } else {
+    const s = runner.state();
+    lastIdx = s.idx;
+    announce(s.phase.type);
+    runner.clock.start();
+  }
+  keepAwake(true);
   render();
 }
 
 function onMain() {
   unlockMedia();
+  if (notStarted()) {
+    if (tpl.registra && cameraSupported()) openFraming();
+    else startTimer();
+    return;
+  }
   if (tpl.tipo === 'tempo') {
     const r = runner;
-    if (r.stato === 'idle') { r.start(); announce(r.stato); keepAwake(true); }
-    else if (r.stato === 'fine') resetRunner();
+    if (r.stato === 'fine') resetRunner();
     else if (r.paused) { r.resume(); keepAwake(true); }
     else if (r.stato === 'lavoro') {
       const i = r.fatto();
@@ -237,11 +294,7 @@ function onMain() {
     const s = runner.state();
     if (s.done) resetRunner();
     else if (runner.clock.running) { runner.clock.pause(); keepAwake(false); }
-    else {
-      if (runner.clock.ms === 0) { lastIdx = s.idx; announce(s.phase.type); }
-      runner.clock.start();
-      keepAwake(true);
-    }
+    else { runner.clock.start(); keepAwake(true); }
   }
   render();
 }
@@ -268,6 +321,8 @@ function onAux() {
 function onTempoFine() {
   announce('fine');
   keepAwake(false);
+  finishSession(true);
+  endRecording();
   // Se l'utente sta già inserendo le esecuzioni, il riepilogo arriva dopo il salvataggio.
   if (sheetKind !== 'reps') continueFine();
 }
@@ -276,6 +331,157 @@ function continueFine() {
   const i = runner.serie.findIndex(s => s.reps === null);
   if (i >= 0) openReps(i);
   else openSummary();
+}
+
+// --- Risultati --------------------------------------------------------------
+
+function sessionComplete() {
+  const t = runner.tpl;
+  if (t.tipo === 'tempo') return runner.stato === 'fine';
+  if (t.tipo === 'cronometro' && t.direzione !== 'indietro') return true;   // il cronometro non ha una fine
+  return runner.state().done;
+}
+
+// Risultato dell'allenamento a partire dallo stato del timer.
+function buildResult(r, completo) {
+  const t = r.tpl, sch = db.schedaOf(t.id);
+  const res = {
+    id: r.resultId ??= db.uid(), data: r.startedAt ?? new Date().toISOString(), tipo: t.tipo,
+    modello: db.templateKey(t), nome: t.nome, scheda: sch?.id ?? null, schedaNome: sch?.nome ?? '', completo,
+  };
+  if (t.tipo === 'tempo') {
+    return {
+      ...res, fatte: r.totale, obiettivo: t.obiettivo, tempoTotale: t.tempoTotale,
+      raggiuntoAl: r.obiettivoRaggiuntoAl(), serie: r.serie.map(s => s.reps ?? 0),
+    };
+  }
+  const el = Math.min(r.clock.ms / 1000, r.total);
+  if (t.tipo === 'round') {
+    let start = 0, fatti = 0, totali = 0, lavoro = 0;
+    r.phases.forEach((p, i) => {
+      const end = r.ends[i];
+      if (p.type === 'lavoro') {
+        totali++;
+        if (el >= end) fatti++;
+        lavoro += Math.max(0, Math.min(el, end) - start);
+      }
+      start = end;
+    });
+    return { ...res, roundFatti: fatti, roundTotali: totali, lavoroSec: Math.round(lavoro) };
+  }
+  const prep = r.phases[0].type === 'prepara' ? r.phases[0].duration : 0;
+  const durs = laps.map((x, i) => x - (laps[i - 1] ?? 0));
+  return {
+    ...res, durataSec: Math.round(Math.max(0, el - prep)), giri: durs.length || null,
+    giroMigliore: durs.length ? Math.round(Math.min(...durs) * 10) / 10 : null,
+  };
+}
+
+const hasWork = res => (res.tipo === 'tempo' ? res.serie.length > 0 : res.tipo === 'round' ? res.lavoroSec > 0 : res.durataSec > 0);
+
+// Salva il risultato dell'allenamento appena concluso e propone la valutazione.
+function finishSession(completo) {
+  const r = runner;
+  if (!r || r.recorded || !r.startedAt) return;
+  const res = buildResult(r, completo);
+  if (!hasWork(res)) return;
+  r.recorded = true;
+  try { db.saveResult(db.compact(res)); } catch { return; }
+  enqueue(() => openFeedback(res.id));
+}
+
+// Dopo una correzione delle serie (Entro il tempo) il risultato salvato si aggiorna.
+function refreshResult(r) {
+  if (!r.recorded) return;
+  const old = db.getStorico().find(x => x.id === r.resultId);
+  if (old) try { db.saveResult(db.compact({ ...old, ...buildResult(r, r.stato === 'fine') })); } catch { /* non critico */ }
+}
+
+function enqueue(open) {
+  queue.push(open);
+  runQueue();
+}
+
+function runQueue() {
+  setTimeout(() => { if (!sheetKind && queue.length) queue.shift()(); }, 0);
+}
+
+function openFeedback(id) {
+  const res = db.getStorico().find(x => x.id === id);
+  if (!res) return;
+  const fromCoach = !!(res.scheda && db.getScheda(res.scheda)?.ricevuta);
+  const askReps = res.tipo !== 'tempo';
+  openSheet('feedback', `
+    <h2>Com'è andata?</h2>
+    <p><b>${esc(res.nome)}</b> — ${esc(resultLine(res))}</p>
+    <h3>Fatica (1 = facile, 10 = al limite)</h3>
+    <div class="scale">${Array.from({ length: 10 }, (_, i) => `<button class="btn" data-f="${i + 1}" aria-pressed="false">${i + 1}</button>`).join('')}</div>
+    ${askReps ? '<label class="field"><span>Ripetizioni totali (se le hai contate)</span><input type="number" inputmode="numeric" min="0" name="rip"></label>' : ''}
+    <label class="field"><span>Nota</span><input type="text" name="nota" maxlength="200" placeholder="Facoltativa"></label>
+    <div class="row">
+      <button class="btn" data-act="skip">Salta</button>
+      <button class="btn${fromCoach ? '' : ' primary'}" data-act="save">Salva</button>
+    </div>
+    <button class="btn block${fromCoach ? ' primary' : ''}" data-act="coach">Salva e invia al coach</button>`, panel => {
+    let fatica = null;
+    panel.querySelectorAll('[data-f]').forEach(b => {
+      b.onclick = () => {
+        fatica = Number(b.dataset.f);
+        panel.querySelectorAll('[data-f]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+      };
+    });
+    const save = () => {
+      const rip = panel.querySelector('[name=rip]')?.value;
+      const nota = panel.querySelector('[name=nota]').value.trim();
+      const upd = db.cleanResult({ ...res, fatica, ripetizioni: rip === '' || rip == null ? null : rip, nota });
+      if (upd) try { db.saveResult(upd); } catch { /* non critico */ }
+      return upd ?? res;
+    };
+    panel.querySelector('[data-act=skip]').onclick = closeSheet;
+    panel.querySelector('[data-act=save]').onclick = () => { save(); closeSheet(); };
+    panel.querySelector('[data-act=coach]').onclick = () => { const r = save(); closeSheet(); sendToCoach([r]); };
+  });
+}
+
+// --- Condivisione -----------------------------------------------------------
+
+// Menu di condivisione del telefono; se non disponibile o bloccato, un pannello con WhatsApp e Copia.
+async function shareMessage(text) {
+  if (navigator.share) {
+    try { await navigator.share({ text }); return; } catch (e) {
+      if (e.name === 'AbortError') return;
+    }
+  }
+  openSheet('share', `
+    <h2>Invia</h2>
+    <p>Scegli come inviare il messaggio.</p>
+    <textarea class="share-text" readonly>${esc(text)}</textarea>
+    <div class="row">
+      <button class="btn" data-act="copy">Copia</button>
+      <a class="btn primary" href="https://wa.me/?text=${encodeURIComponent(text)}" target="_blank" rel="noopener">WhatsApp</a>
+    </div>
+    ${navigator.share ? '<button class="btn block" data-act="share">Altre app…</button>' : ''}
+    <button class="btn block" data-act="close">Chiudi</button>`, panel => {
+    panel.querySelector('[data-act=copy]').onclick = async e => {
+      try { await navigator.clipboard.writeText(text); e.target.textContent = 'Copiato'; } catch {
+        panel.querySelector('textarea').select();
+      }
+    };
+    const more = panel.querySelector('[data-act=share]');
+    if (more) more.onclick = () => navigator.share({ text }).catch(() => {});
+  });
+}
+
+async function sendToCoach(results) {
+  if (!results.length) return;
+  if (!settings.nomeAtleta && !settings.nomeChiesto) {
+    const nome = (prompt('Il tuo nome per il coach (facoltativo, puoi cambiarlo nelle Impostazioni):', '') || '').trim().slice(0, 40);
+    settings = { ...settings, nomeAtleta: nome, nomeChiesto: true };
+    db.saveSettings(settings);
+  }
+  const atleta = settings.nomeAtleta;
+  const link = await encodeLink('risultati', { v: 1, atleta, risultati: results.slice(-60) });
+  await shareMessage(`${coachMessage(results, atleta)}\n\nApri in Tempro: ${link}`);
 }
 
 // --- Modello di vista per ciascuna modalità ---------------------------------
@@ -456,6 +662,10 @@ function render() {
   $('btn-main').setAttribute('aria-label', v.label);
   renderSide('btn-left', v.left);
   renderSide('btn-aux', v.aux);
+  if (cam.active) {
+    setText('rec-time', fmt(cam.recordedSec));
+    $('rec').classList.toggle('paused', !cam.recording);
+  }
 }
 
 function updateMedia() {
@@ -484,6 +694,138 @@ function closeSheet() {
   $('sheet').hidden = true;
   $('sheet-panel').innerHTML = '';
   sheetKind = null;
+  if (videoUrl) { URL.revokeObjectURL(videoUrl); videoUrl = null; }
+  if (queue.length) runQueue();
+}
+
+// --- Ripresa video ----------------------------------------------------------
+
+async function startPreview() {
+  const msg = $('cam-msg'), go = $('cam-go'), flip = $('cam-flip'), audio = $('cam-audio');
+  // Durante l'avvio niente altri comandi, per non aprire due fotocamere insieme.
+  go.disabled = flip.disabled = audio.disabled = true;
+  msg.textContent = 'Avvio della fotocamera…';
+  try {
+    const stream = await cam.open({ facing, audio: $('cam-audio').checked });
+    for (const id of ['cam-full', 'cam-small']) {
+      const v = $(id);
+      v.srcObject = stream;
+      v.classList.toggle('mirror', facing === 'user');
+      v.play?.().catch(() => {});
+    }
+    msg.textContent = "Appoggia il telefono e controlla l'inquadratura. Verranno registrate solo le fasi di lavoro.";
+    go.disabled = false;
+  } catch (e) {
+    msg.textContent = e.name === 'NotAllowedError'
+      ? 'Permesso negato. Consenti la fotocamera per questo sito nelle impostazioni del browser, oppure continua senza video.'
+      : 'Fotocamera non disponibile. Puoi continuare senza video.';
+  } finally {
+    flip.disabled = audio.disabled = false;
+  }
+}
+
+function openFraming() {
+  facing = tpl.fotocamera === 'environment' ? 'environment' : 'user';
+  $('cam-audio').checked = tpl.audio !== false;
+  $('camera').hidden = false;
+  startPreview();
+}
+
+function closeFraming() {
+  $('camera').hidden = true;
+  $('cam-full').srcObject = null;
+}
+
+$('cam-flip').addEventListener('click', () => { facing = facing === 'user' ? 'environment' : 'user'; startPreview(); });
+$('cam-audio').addEventListener('change', startPreview);
+$('cam-skip').addEventListener('click', () => {
+  cam.closeStream();
+  closeFraming();
+  startTimer();
+});
+$('cam-go').addEventListener('click', () => {
+  // Le scelte fatte qui diventano quelle predefinite del modello.
+  const audio = $('cam-audio').checked;
+  if ((tpl.fotocamera !== facing || tpl.audio !== audio) && db.getTemplate(tpl.id)) {
+    tpl = { ...tpl, fotocamera: facing, audio };
+    try { db.saveTemplate(tpl); } catch { /* non critico */ }
+  }
+  closeFraming();
+  cam.begin(tpl.nome);
+  $('rec-time').textContent = '00:00';
+  $('cam-mini').hidden = false;
+  startTimer();
+});
+
+async function endRecording() {
+  if (!cam.active) return;
+  $('cam-mini').hidden = true;
+  $('cam-small').srcObject = null;
+  try {
+    const meta = await cam.finish();
+    if (meta) enqueue(() => openVideoSheet(meta));
+  } catch {
+    alert('Non è stato possibile completare il video: memoria del telefono piena?');
+  }
+}
+
+function download(file) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file);
+  a.download = file.name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+async function openVideoSheet(meta) {
+  openSheet('video', '<h2>Video dei lavori</h2><p>Preparazione del video…</p>', null, { dismissable: false });
+  let blob;
+  try { blob = await videoStore.blob(meta); } catch { blob = null; }
+  if (sheetKind !== 'video') return;
+  if (!blob?.size) {
+    await videoStore.remove(meta.id).catch(() => {});
+    openSheet('video', '<h2>Video dei lavori</h2><p>Non è stato registrato nulla.</p><button class="btn block primary" data-act="close">Chiudi</button>');
+    return;
+  }
+  const ext = meta.mime.includes('mp4') ? 'mp4' : 'webm';
+  const slug = meta.nome.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'allenamento';
+  const file = new File([blob], `tempro-${slug}-${meta.creato.slice(0, 10)}.${ext}`, { type: blob.type || `video/${ext}` });
+  videoUrl = URL.createObjectURL(blob);
+  const when = new Date(meta.creato).toLocaleString('it-IT', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  openSheet('video', `
+    <h2>Video dei lavori</h2>
+    <video class="media-video" src="${videoUrl}" controls playsinline></video>
+    <div class="kv"><span>${esc(meta.nome)} · ${when}</span><b>${fmt(meta.durata)} · ${Math.max(1, Math.round(blob.size / 1048576))} MB</b></div>
+    <p id="vid-msg">Il video non resta nell'app: salvalo nel Rullino o condividilo prima di chiudere.</p>
+    <div class="row">
+      <button class="btn danger" data-act="discard">Scarta</button>
+      <button class="btn primary" data-act="save">Salva</button>
+    </div>`, panel => {
+    const msg = panel.querySelector('#vid-msg');
+    const saved = () => {
+      msg.textContent = 'Salvato. Puoi salvarlo di nuovo o chiudere: chiudendo viene tolto dalla memoria dell\'app.';
+      const discard = panel.querySelector('[data-act=discard]');
+      discard.textContent = 'Chiudi';
+      discard.className = 'btn';
+      discard.onclick = async () => { await videoStore.remove(meta.id).catch(() => {}); closeSheet(); };
+    };
+    panel.querySelector('[data-act=save]').onclick = async () => {
+      if (navigator.canShare?.({ files: [file] })) {
+        try { await navigator.share({ files: [file] }); saved(); return; } catch (e) {
+          if (e.name === 'AbortError') return;
+        }
+      }
+      download(file);
+      saved();
+    };
+    panel.querySelector('[data-act=discard]').onclick = async () => {
+      if (!confirm('Eliminare il video? Non potrà essere recuperato.')) return;
+      await videoStore.remove(meta.id).catch(() => {});
+      closeSheet();
+    };
+  }, { dismissable: false });
 }
 
 function openReps(i) {
@@ -512,6 +854,7 @@ function openReps(i) {
     const done = reps => {
       if (r !== runner) return closeSheet();
       if (reps !== null) r.serie[i].reps = reps;
+      refreshResult(r);
       closeSheet();
       if (r.stato === 'fine') continueFine();
       render();
@@ -595,10 +938,13 @@ function summary(t) {
 function openPicker() {
   if (!tpl) return;
   const list = db.getTemplates(tpl.tipo);
-  const items = list.map(t => `
+  const items = list.map(t => {
+    const sch = db.schedaOf(t.id);
+    return `
     <button class="card${t.id === tpl.id ? ' current' : ''}" data-id="${esc(t.id)}">
-      <span class="info"><span class="name" style="display:block">${esc(t.nome)}</span><span class="sum" style="display:block">${esc(summary(t))}</span></span>
-    </button>`).join('') || '<div class="empty">Nessun modello salvato.</div>';
+      <span class="info"><span class="name" style="display:block">${esc(t.nome)}</span><span class="sum" style="display:block">${sch ? `Scheda ${esc(sch.nome)} · ` : ''}${esc(summary(t))}</span></span>
+    </button>`;
+  }).join('') || '<div class="empty">Nessun modello salvato.</div>';
   openSheet('picker', `
     <h2>${db.TYPES[tpl.tipo].nome}</h2>
     ${items}
@@ -670,6 +1016,14 @@ function openEditor(t, isNew) {
         <button type="button" class="btn danger" data-act="noimg">Rimuovi immagine</button>
       </div>
       <img id="ed-prev" class="img-preview" alt="">
+      <h3>Video</h3>
+      ${cameraSupported() ? '' : '<p>Questo browser non permette di registrare video.</p>'}
+      <label class="field toggle"><span>Registra le fasi di lavoro</span><input type="checkbox" name="registra"${t.registra ? ' checked' : ''}></label>
+      <label class="field"><span>Fotocamera</span><select name="fotocamera">
+        <option value="user"${t.fotocamera !== 'environment' ? ' selected' : ''}>Frontale</option>
+        <option value="environment"${t.fotocamera === 'environment' ? ' selected' : ''}>Posteriore</option>
+      </select></label>
+      <label class="field toggle"><span>Registra l'audio</span><input type="checkbox" name="audio"${t.audio !== false ? ' checked' : ''}></label>
       <div id="ed-err" class="error"></div>
       <div class="row">
         <button type="button" class="btn" data-act="close">Annulla</button>
@@ -715,6 +1069,9 @@ function openEditor(t, isNew) {
       if (immagine && !safeImg(immagine)) { err.textContent = 'Il link immagine deve iniziare con https://'; return; }
       out.video = video;
       out.immagine = immagine;
+      out.registra = fd.get('registra') === 'on';
+      out.fotocamera = fd.get('fotocamera') === 'environment' ? 'environment' : 'user';
+      out.audio = fd.get('audio') === 'on';
       try { db.saveTemplate(out); } catch {
         err.textContent = "Spazio esaurito sul telefono: usa un'immagine più piccola o un link.";
         return;
@@ -731,29 +1088,70 @@ function openEditor(t, isNew) {
 
 // --- Elenco modelli ---------------------------------------------------------
 
-function renderSessions() {
-  const card = t => {
-    const img = safeImg(t.immagine);
-    return `<div class="card">
-      ${img ? `<div class="thumb" style="background-image:${esc(cssUrl(img))}"></div>` : ''}
-      <div class="info">
-        <div class="name">${esc(t.nome)}</div>
-        <div class="sum">${esc(summary(t))}${t.video ? ' · video' : ''}</div>
-        <div class="actions">
-          <button class="btn small primary" data-act="start" data-id="${esc(t.id)}">Avvia</button>
-          <button class="btn small" data-act="edit" data-id="${esc(t.id)}">Modifica</button>
-          <button class="btn small" data-act="dup" data-id="${esc(t.id)}">Duplica</button>
-          <button class="btn small danger" data-act="del" data-id="${esc(t.id)}">Elimina</button>
-        </div>
+function templateCard(t, { compact = false } = {}) {
+  const img = safeImg(t.immagine);
+  const id = esc(t.id);
+  return `<div class="card${compact ? ' sub' : ''}">
+    ${img ? `<div class="thumb" style="background-image:${esc(cssUrl(img))}"></div>` : ''}
+    <div class="info">
+      <div class="name">${esc(t.nome)}</div>
+      <div class="sum">${esc(db.TYPES[t.tipo].nome)} · ${esc(summary(t))}${t.video ? ' · video esercizio' : ''}${t.registra ? ' · ripresa dei lavori' : ''}</div>
+      <div class="actions">
+        <button class="btn small primary" data-act="start" data-id="${id}">Avvia</button>
+        <button class="btn small" data-act="edit" data-id="${id}">Modifica</button>
+        ${compact ? '' : `<button class="btn small" data-act="dup" data-id="${id}">Duplica</button>
+        <button class="btn small danger" data-act="del" data-id="${id}">Elimina</button>`}
       </div>
+    </div>
+  </div>`;
+}
+
+function schedaCard(s) {
+  const modelli = s.modelli.map(db.getTemplate).filter(Boolean);
+  const id = esc(s.id);
+  if (s.ricevuta) {
+    return `<div class="scheda">
+      <div class="scheda-head">
+        <div>
+          <div class="name">${esc(s.nome)}</div>
+          <div class="sum">${s.coach ? `da ${esc(s.coach)} · ` : 'Ricevuta · '}${modelli.length} allenamenti · aggiornata il ${esc(dateLabel(s.data))}</div>
+        </div>
+        <button class="btn small danger" data-act="sch-del" data-id="${id}">Elimina</button>
+      </div>
+      ${s.nota ? `<p class="nota">${esc(s.nota)}</p>` : ''}
+      ${modelli.map(t => templateCard(t, { compact: true })).join('')}
     </div>`;
-  };
-  let html = `${WORDMARK}<p class="hint">I tuoi modelli, salvati solo su questo telefono. Nessun dato personale.</p>`;
+  }
+  return `<div class="scheda mine">
+    <div class="scheda-head">
+      <div>
+        <div class="name">${esc(s.nome)}</div>
+        <div class="sum">Creata da te${s.coach ? ` · coach ${esc(s.coach)}` : ''} · ${modelli.length} allenamenti</div>
+      </div>
+    </div>
+    <div class="sum">${modelli.map(t => esc(t.nome)).join(' · ') || 'Nessun allenamento'}</div>
+    <div class="actions">
+      <button class="btn small primary" data-act="sch-share" data-id="${id}">Condividi</button>
+      <button class="btn small" data-act="sch-edit" data-id="${id}">Modifica</button>
+      <button class="btn small danger" data-act="sch-del" data-id="${id}">Elimina</button>
+    </div>
+  </div>`;
+}
+
+function renderSessions() {
+  const schede = db.getSchede();
+  let html = `${WORDMARK}<p class="hint">Modelli e schede salvati solo su questo telefono.</p>
+    <button class="btn block" data-act="paste">Incolla una scheda o dei risultati ricevuti</button>
+    <div class="group-head"><h2>Schede</h2>
+      <button class="btn small primary" data-act="sch-new">+ Nuova scheda</button></div>`;
+  html += schede.length
+    ? schede.map(schedaCard).join('')
+    : '<div class="empty">Una scheda raggruppa più allenamenti da inviare a un atleta. Le schede ricevute dal coach compaiono qui.</div>';
   for (const [tipo, def] of Object.entries(db.TYPES)) {
-    const list = db.getTemplates(tipo);
+    const list = db.getTemplates(tipo).filter(t => !db.isReceived(t.id));
     html += `<div class="group-head"><h2>${def.nome}</h2>
       <button class="btn small primary" data-act="new" data-tipo="${tipo}">+ Nuovo</button></div>`;
-    html += list.length ? list.map(card).join('') : '<div class="empty">Nessun modello.</div>';
+    html += list.length ? list.map(t => templateCard(t)).join('') : '<div class="empty">Nessun modello.</div>';
   }
   $('sessions-view').innerHTML = html;
 }
@@ -762,6 +1160,7 @@ $('sessions-view').addEventListener('click', e => {
   const b = e.target.closest('[data-act]');
   if (!b) return;
   const t = db.getTemplate(b.dataset.id);
+  const s = db.getScheda(b.dataset.id);
   switch (b.dataset.act) {
     case 'new': openEditor(db.newTemplate(b.dataset.tipo), true); break;
     case 'start': db.setSelected(t.tipo, t.id); loadMode(t.tipo); break;
@@ -769,6 +1168,324 @@ $('sessions-view').addEventListener('click', e => {
     case 'dup': db.duplicateTemplate(t.id); renderSessions(); break;
     case 'del':
       if (confirm(`Eliminare "${t.nome}"?`)) { db.deleteTemplate(t.id); renderSessions(); }
+      break;
+    case 'paste': openPaste(); break;
+    case 'sch-new': openSchedaEditor(null); break;
+    case 'sch-edit': openSchedaEditor(s); break;
+    case 'sch-share': shareScheda(s); break;
+    case 'sch-del': {
+      const msg = s.ricevuta
+        ? `Eliminare la scheda "${s.nome}" e i suoi allenamenti? Il tuo storico resta.`
+        : `Eliminare la scheda "${s.nome}"? Gli allenamenti restano tra i tuoi modelli.`;
+      if (confirm(msg)) { db.deleteScheda(s.id); renderSessions(); }
+      break;
+    }
+  }
+});
+
+// --- Schede: creazione, condivisione, ricezione ------------------------------
+
+function openSchedaEditor(s) {
+  const isNew = !s;
+  const sc = s ?? { id: db.uid(), nome: '', coach: settings.nomeCoach || '', nota: '', ricevuta: false, modelli: [] };
+  const personal = db.getTemplates().filter(t => !db.isReceived(t.id));
+  const groups = Object.entries(db.TYPES).map(([tipo, def]) => {
+    const list = personal.filter(t => t.tipo === tipo);
+    if (!list.length) return '';
+    return `<h3>${def.nome}</h3>${list.map(t => `
+      <label class="field toggle"><span>${esc(t.nome)}<br><small class="sum">${esc(summary(t))}</small></span>
+        <input type="checkbox" name="m" value="${esc(t.id)}"${sc.modelli.includes(t.id) ? ' checked' : ''}></label>`).join('')}`;
+  }).join('');
+  openSheet('scheda', `
+    <h2>${isNew ? 'Nuova scheda' : 'Modifica scheda'}</h2>
+    <form id="sch" novalidate>
+      <label class="field"><span>Nome</span><input type="text" name="nome" value="${esc(sc.nome)}" maxlength="60" placeholder="Es. Settimana 1"></label>
+      <label class="field"><span>Coach</span><input type="text" name="coach" value="${esc(sc.coach)}" maxlength="40" placeholder="Facoltativo"></label>
+      <label class="field"><span>Nota</span><input type="text" name="nota" value="${esc(sc.nota)}" maxlength="500" placeholder="Facoltativa"></label>
+      <h3>Allenamenti</h3>
+      <p>Scegli gli allenamenti da includere. Le foto caricate dal telefono non vengono inviate; i link a immagini e video sì.</p>
+      ${groups || '<p>Crea prima qualche modello.</p>'}
+      <div id="sch-err" class="error"></div>
+      <div class="row">
+        <button type="button" class="btn" data-act="close">Annulla</button>
+        <button type="submit" class="btn primary">Salva</button>
+      </div>
+    </form>`, panel => {
+    const form = panel.querySelector('#sch');
+    form.onsubmit = e => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const modelli = fd.getAll('m').map(String);
+      const err = panel.querySelector('#sch-err');
+      if (!modelli.length) { err.textContent = 'Scegli almeno un allenamento.'; return; }
+      const out = {
+        ...sc, nome: String(fd.get('nome')).trim() || 'Scheda', coach: String(fd.get('coach')).trim(),
+        nota: String(fd.get('nota')).trim(), modelli,
+      };
+      try { db.saveScheda(out); } catch { err.textContent = 'Spazio esaurito sul telefono.'; return; }
+      if (out.coach !== settings.nomeCoach) { settings = { ...settings, nomeCoach: out.coach }; db.saveSettings(settings); }
+      closeSheet();
+      renderSessions();
+    };
+  });
+}
+
+async function shareScheda(s) {
+  const p = db.schedaPayload(s);
+  if (!p.modelli.length) { alert('La scheda non contiene allenamenti.'); return; }
+  const link = await encodeLink('scheda', p);
+  const righe = p.modelli.map(m => `• ${m.nome}`).join('\n');
+  await shareMessage(`Scheda "${p.nome}"${p.coach ? ` di ${p.coach}` : ''} — ${p.modelli.length} allenamenti:\n${righe}${p.nota ? `\n\n${p.nota}` : ''}\n\nAprila con Tempro: ${link}`);
+}
+
+// Pulsante "Copia per l'app": in Safari su iPhone la memoria è separata da quella dell'app sulla Home.
+function iosCopyBlock(text) {
+  if (!isIosBrowser()) return '';
+  return `<p class="nota">Hai Tempro sulla schermata Home? Safari e l'app hanno memorie separate: tocca <b>Copia per l'app</b>, poi apri Tempro dalla Home e nella pagina Modelli premi <b>Incolla una scheda o dei risultati</b>.</p>
+    <button class="btn block" data-act="copy-app" data-text="${esc(text)}">Copia per l'app</button>`;
+}
+
+function bindCopy(panel) {
+  const b = panel.querySelector('[data-act=copy-app]');
+  if (b) b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.text); b.textContent = 'Copiato: ora apri Tempro dalla Home'; } catch {
+      b.textContent = 'Copia non riuscita';
+    }
+  };
+}
+
+async function handleIncoming(text, fromLink = false) {
+  let parsed;
+  try { parsed = await decodeLink(text); } catch (e) {
+    if (fromLink) history.replaceState(null, '', location.pathname + location.search);
+    openSheet('error', `<h2>Link non leggibile</h2><p>${esc(e.message)}</p><button class="btn block primary" data-act="close">Chiudi</button>`);
+    return true;
+  }
+  if (!parsed) return false;
+  if (fromLink) history.replaceState(null, '', location.pathname + location.search);
+  const link = String(text).match(/https?:\/\/\S+#[sr]=\S+/)?.[0] ?? `${location.origin}${location.pathname}${String(text).match(/#[sr]=\S+/)?.[0] ?? ''}`;
+  if (parsed.kind === 'scheda') openSchedaPreview(parsed.data, link);
+  else openRisultatiPreview(parsed.data, link);
+  return true;
+}
+
+function openSchedaPreview(data, link) {
+  let sc;
+  try { sc = db.readScheda(data); } catch (e) {
+    openSheet('error', `<h2>Scheda non valida</h2><p>${esc(e.message)}</p><button class="btn block primary" data-act="close">Chiudi</button>`);
+    return;
+  }
+  const mine = sc.esistente === 'mia';
+  openSheet('import', `
+    <h2>Scheda "${esc(sc.nome)}"</h2>
+    <p>${sc.coach ? `da <b>${esc(sc.coach)}</b> · ` : ''}${sc.modelli.length} allenamenti</p>
+    ${sc.nota ? `<p class="nota">${esc(sc.nota)}</p>` : ''}
+    ${sc.modelli.map(t => `<div class="kv"><span>${esc(t.nome)}</span><b>${esc(db.TYPES[t.tipo].nome)}</b></div>
+      <p class="sum">${esc(summary(t))}</p>`).join('')}
+    ${mine ? '<p>Questa scheda è stata creata su questo telefono.</p>' : ''}
+    ${sc.esistente === 'ricevuta' ? '<p>Hai già questa scheda: verrà aggiornata con la nuova versione. Il tuo storico resta.</p>' : ''}
+    ${mine ? '' : iosCopyBlock(link)}
+    <div class="row">
+      <button class="btn" data-act="close">${mine ? 'Chiudi' : 'Annulla'}</button>
+      ${mine ? '' : `<button class="btn primary" data-act="import">${sc.esistente ? 'Aggiorna' : 'Importa'}</button>`}
+    </div>`, panel => {
+    bindCopy(panel);
+    const imp = panel.querySelector('[data-act=import]');
+    if (imp) imp.onclick = () => {
+      try {
+        const res = db.importScheda(sc);
+        closeSheet();
+        loadMode('sessioni');
+        openSheet('ok', `<h2>${res.aggiornata ? 'Scheda aggiornata' : 'Scheda importata'}</h2>
+          <p>"${esc(sc.nome)}" con ${res.n} allenamenti è nella pagina Modelli.</p>
+          <button class="btn block primary" data-act="close">OK</button>`);
+      } catch (e) { alert(e.message); }
+    };
+  });
+}
+
+function openRisultatiPreview(data, link) {
+  const list = (Array.isArray(data?.risultati) ? data.risultati : []).map(db.cleanResult).filter(Boolean);
+  const atleta = String(data?.atleta ?? '').trim().slice(0, 40) || 'Atleta senza nome';
+  if (!list.length) {
+    openSheet('error', '<h2>Nessun risultato</h2><p>Il link non contiene risultati validi.</p><button class="btn block primary" data-act="close">Chiudi</button>');
+    return;
+  }
+  const rows = list.slice(-8).map(r => `<div class="kv"><span>${esc(dateLabel(r.data))} · ${esc(r.nome)}</span></div><p class="sum">${esc(resultLine(r))}</p>`).join('');
+  openSheet('import', `
+    <h2>Risultati di ${esc(atleta)}</h2>
+    <p>${list.length} allenament${list.length === 1 ? 'o' : 'i'}${list[0].schedaNome ? ` · scheda "${esc(list[0].schedaNome)}"` : ''}</p>
+    ${list.length > 8 ? `<p>Ultimi 8 di ${list.length}:</p>` : ''}${rows}
+    ${iosCopyBlock(link)}
+    <div class="row">
+      <button class="btn" data-act="close">Annulla</button>
+      <button class="btn primary" data-act="import">Aggiungi ai miei atleti</button>
+    </div>`, panel => {
+    bindCopy(panel);
+    panel.querySelector('[data-act=import]').onclick = () => {
+      try {
+        const res = db.importRisultati(data);
+        reportTab = 'atleti';
+        reportAtleta = res.atleta;
+        closeSheet();
+        loadMode('andamento');
+        openSheet('ok', `<h2>Risultati aggiunti</h2>
+          <p>${res.nuovi} nuov${res.nuovi === 1 ? 'o' : 'i'} per ${esc(res.atleta)}${res.presenti ? `, ${res.presenti} già presenti` : ''}.</p>
+          <button class="btn block primary" data-act="close">OK</button>`);
+      } catch (e) { alert(e.message); }
+    };
+  });
+}
+
+// Incolla: legge gli appunti (iOS chiede conferma) oppure lascia incollare a mano.
+async function openPaste() {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (await handleIncoming(text)) return;
+  } catch { /* permesso negato o non supportato: si incolla a mano */ }
+  openSheet('paste', `
+    <h2>Incolla</h2>
+    <p>Incolla qui il messaggio o il link ricevuto (scheda dal coach o risultati di un atleta).</p>
+    <textarea class="share-text" id="paste-text" placeholder="Tieni premuto e scegli Incolla"></textarea>
+    <div id="paste-err" class="error"></div>
+    <div class="row">
+      <button class="btn" data-act="close">Annulla</button>
+      <button class="btn primary" data-act="go">Apri</button>
+    </div>`, panel => {
+    panel.querySelector('[data-act=go]').onclick = async () => {
+      const text = panel.querySelector('#paste-text').value;
+      closeSheet();
+      if (!(await handleIncoming(text))) openPaste.notFound();
+    };
+  });
+}
+openPaste.notFound = () => openSheet('error', `<h2>Nessun link trovato</h2>
+  <p>Il testo non contiene un link di Tempro. Copia l'intero messaggio ricevuto e riprova.</p>
+  <button class="btn block primary" data-act="close">Chiudi</button>`);
+
+// --- Andamento --------------------------------------------------------------
+
+function modelCard(m, own) {
+  const s = seriesFor(m.results);
+  const last = m.results.reduce((a, r) => (r.data > a.data ? r : a));
+  return `<div class="card report-card">
+    <div class="info">
+      <div class="name">${esc(m.nome)}</div>
+      <div class="sum">${esc(db.TYPES[m.tipo]?.nome ?? '')} · ${m.results.length} session${m.results.length === 1 ? 'e' : 'i'} · ultima ${esc(dateLabel(last.data))}: ${esc(resultLine(last))}</div>
+      <h4 class="chart-title">${esc(s.name)}</h4>
+      ${chartSvg(s)}
+      <div class="actions"><button class="btn small" data-act="detail" data-key="${esc(m.key)}" data-own="${own ? 1 : 0}">Tutte le sessioni</button></div>
+    </div>
+  </div>`;
+}
+
+function tiles(results) {
+  const st = stats(results);
+  return `<div class="tiles">
+    <div class="tile"><span class="tile-v">${st.settimana}</span><span class="tile-k">questa settimana</span></div>
+    <div class="tile"><span class="tile-v">${st.giorni}</span><span class="tile-k">giorni di fila</span></div>
+    <div class="tile"><span class="tile-v">${st.mese}</span><span class="tile-k">questo mese</span></div>
+  </div>`;
+}
+
+function reportResults() {
+  if (reportTab === 'atleti') return db.getAtleti().filter(r => r.atleta === reportAtleta);
+  return db.getStorico();
+}
+
+function renderReport() {
+  const atleti = [...new Set(db.getAtleti().map(r => r.atleta))];
+  if (reportTab === 'atleti' && !atleti.includes(reportAtleta)) reportAtleta = atleti[0];
+  const own = reportTab === 'miei';
+  const results = reportResults();
+  let html = '<h1 class="page-title">Andamento</h1>';
+  html += `<div class="seg" role="tablist">
+    <button role="tab" aria-selected="${own}" data-act="tab-miei">I miei</button>
+    <button role="tab" aria-selected="${!own}" data-act="tab-atleti">Atleti${atleti.length ? ` (${atleti.length})` : ''}</button>
+  </div>`;
+  if (!own) {
+    html += `<div class="chips">${atleti.map(a => `<button class="chip" aria-pressed="${a === reportAtleta}" data-act="atleta" data-name="${esc(a)}">${esc(a)}</button>`).join('')}</div>`;
+  }
+  if (!own && !atleti.length) {
+    html += `<p class="hint">Qui vedrai i risultati che i tuoi atleti ti inviano dalla loro app. Quando ricevi un messaggio con un link di Tempro, aprilo oppure copialo e premi il pulsante qui sotto.</p>
+      <button class="btn block" data-act="paste">Incolla dei risultati ricevuti</button>`;
+  } else if (!results.length) {
+    html += tiles([]) + '<p class="hint">Completa un allenamento per vedere qui il tuo andamento.</p>';
+  } else {
+    html += tiles(results);
+    for (const g of groupResults(results)) {
+      html += `<div class="group-head"><h2>${esc(g.nome)}</h2>
+        ${own ? `<button class="btn small" data-act="send-group" data-scheda="${esc(g.id ?? '')}">Invia al coach</button>` : ''}</div>`;
+      html += g.modelli.map(m => modelCard(m, own)).join('');
+    }
+    if (!own) html += `<button class="btn block" data-act="paste">Incolla altri risultati</button>
+      <button class="btn block danger" data-act="del-atleta">Elimina i dati di ${esc(reportAtleta)}</button>`;
+  }
+  $('report-view').innerHTML = html;
+}
+
+function openDetail(key, own) {
+  const results = reportResults().filter(r => r.modello === key).sort((a, b) => b.data.localeCompare(a.data));
+  if (!results.length) return;
+  const s = seriesFor(results);
+  const rows = results.map(r => {
+    const p = s.points.find(x => x.r === r);
+    return `<tr><td>${esc(dateTimeLabel(r.data))}${r.nota ? `<br><small class="sum">${esc(r.nota)}</small>` : ''}</td>
+      <td>${p ? esc(formatValue(s, p.y)) : '–'}${r.completo ? '' : '<br><small class="sum">interrotto</small>'}</td>
+      <td>${r.fatica ?? '–'}</td>
+      ${own ? `<td><button class="btn small danger" data-del="${esc(r.id)}" aria-label="Elimina sessione">✕</button></td>` : ''}</tr>`;
+  }).join('');
+  openSheet('detail', `
+    <h2>${esc(results[0].nome)}</h2>
+    <h4 class="chart-title">${esc(s.name)}</h4>
+    ${chartSvg(s)}
+    <h3>Sessioni</h3>
+    <table class="serie"><tr><th>Data</th><th>${esc(s.name)}</th><th>Fatica</th>${own ? '<th></th>' : ''}</tr>${rows}</table>
+    ${own ? `<button class="btn block" data-act="send-model">Invia al coach</button>` : ''}
+    <button class="btn block primary" data-act="close">Chiudi</button>`, panel => {
+    panel.querySelectorAll('[data-del]').forEach(b => {
+      b.onclick = () => {
+        if (!confirm('Eliminare questa sessione dallo storico?')) return;
+        db.deleteResult(b.dataset.del);
+        closeSheet();
+        renderReport();
+        openDetail(key, own);
+      };
+    });
+    const send = panel.querySelector('[data-act=send-model]');
+    if (send) send.onclick = () => { closeSheet(); sendToCoach(results.slice().reverse()); };
+  });
+}
+
+// Tocco su un punto del grafico: il valore compare sotto il grafico.
+function showTip(e) {
+  const hit = e.target.closest('.hit');
+  if (!hit) return false;
+  const fig = hit.closest('.chart');
+  fig.querySelector('.chart-tip').textContent = hit.dataset.tip;
+  fig.querySelectorAll('.dot').forEach(d => d.classList.remove('on'));
+  hit.previousElementSibling?.classList.add('on');
+  return true;
+}
+$('sheet-panel').addEventListener('click', showTip);
+
+$('report-view').addEventListener('click', e => {
+  if (showTip(e)) return;
+  const b = e.target.closest('[data-act]');
+  if (!b) return;
+  switch (b.dataset.act) {
+    case 'tab-miei': reportTab = 'miei'; renderReport(); break;
+    case 'tab-atleti': reportTab = 'atleti'; renderReport(); break;
+    case 'atleta': reportAtleta = b.dataset.name; renderReport(); break;
+    case 'detail': openDetail(b.dataset.key, b.dataset.own === '1'); break;
+    case 'paste': openPaste(); break;
+    case 'send-group': {
+      const id = b.dataset.scheda || null;
+      sendToCoach(db.getStorico().filter(r => (r.scheda ?? null) === id).sort((a, c) => a.data.localeCompare(c.data)));
+      break;
+    }
+    case 'del-atleta':
+      if (confirm(`Eliminare tutti i risultati di ${reportAtleta} da questo telefono?`)) { db.deleteAtleta(reportAtleta); renderReport(); }
       break;
   }
 });
@@ -801,18 +1518,33 @@ function openSettings() {
     ${toggle('voce', 'Voce (annuncia le fasi)')}
     ${toggle('vibrazione', 'Vibrazione')}
     <p>Su iPhone con il tasto silenzioso attivo i suoni non si sentono e la vibrazione non è disponibile: fai riferimento ai colori.</p>
-    <h3>Backup modelli</h3>
-    <p>Esporta i modelli in un file per conservarli o passarli a un altro telefono.</p>
+    <h3>Coach</h3>
+    <label class="field"><span>Il tuo nome nei risultati inviati</span><input type="text" name="nomeAtleta" value="${esc(settings.nomeAtleta)}" maxlength="40" placeholder="Facoltativo"></label>
+    <p>Compare solo nei messaggi che invii tu al coach. Puoi usare un soprannome o le iniziali.</p>
+    <h3>Backup</h3>
+    <p>Esporta modelli, schede e storico in un file per conservarli o passarli a un altro telefono.</p>
     <div class="row">
       <button class="btn" data-act="export">Esporta</button>
       <label class="btn">Importa<input type="file" accept="application/json,.json" hidden></label>
     </div>
     <div id="set-msg" class="error"></div>
-    <p>Nessun dato personale: i modelli restano solo in questo browser.</p>
+    <h3>Storico</h3>
+    <p>I risultati degli allenamenti restano solo su questo telefono.</p>
+    <button class="btn block danger" data-act="clear-sto">Cancella il mio storico</button>
     <button class="btn block primary" data-act="close">Chiudi</button>`, panel => {
     panel.querySelectorAll('.toggle input').forEach(inp => {
       inp.onchange = () => { settings = { ...settings, [inp.name]: inp.checked }; db.saveSettings(settings); };
     });
+    panel.querySelector('[name=nomeAtleta]').onchange = e => {
+      settings = { ...settings, nomeAtleta: e.target.value.trim().slice(0, 40), nomeChiesto: true };
+      db.saveSettings(settings);
+    };
+    panel.querySelector('[data-act=clear-sto]').onclick = () => {
+      if (!confirm('Cancellare tutti i risultati dei tuoi allenamenti? Non si possono recuperare.')) return;
+      db.clearStorico();
+      if (mode === 'andamento') renderReport();
+      closeSheet();
+    };
     panel.querySelector('[data-act=export]').onclick = exportTemplates;
     const msg = panel.querySelector('#set-msg');
     panel.querySelector('input[type=file]').onchange = async ev => {
@@ -821,7 +1553,9 @@ function openSettings() {
       try {
         const n = db.importJSON(await file.text());
         msg.style.color = 'var(--ok)';
-        msg.textContent = `Importati ${n} modelli.`;
+        msg.textContent = `Importati ${n} modelli, con schede e storico.`;
+        if (mode === 'sessioni') renderSessions();
+        if (mode === 'andamento') renderReport();
       } catch (e) {
         msg.style.color = '';
         msg.textContent = `Importazione non riuscita: ${e.message}`;
@@ -854,8 +1588,22 @@ document.querySelectorAll('.tab').forEach(b => {
 });
 
 const savedTab = db.getTab();
-loadMode(db.TYPES[savedTab] || savedTab === 'sessioni' ? savedTab : 'round');
+loadMode(db.TYPES[savedTab] || savedTab === 'sessioni' || savedTab === 'andamento' ? savedTab : 'round');
 setInterval(tick, 100);
+
+// Un video rimasto in sospeso (app chiusa prima di salvarlo) viene riproposto all'apertura.
+if (cameraSupported()) {
+  videoStore.list()
+    .then(list => {
+      const last = list.sort((a, b) => b.creato.localeCompare(a.creato))[0];
+      if (last) enqueue(() => openVideoSheet(last));
+    })
+    .catch(() => {});
+}
+
+// Aperta da un link di scheda o di risultati.
+handleIncoming(location.hash, true);
+addEventListener('hashchange', () => handleIncoming(location.hash, true));
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').catch(() => {});

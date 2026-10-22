@@ -33,6 +33,12 @@ export function fmt(sec, { ceil = false } = {}) {
   return h ? `${h}:${p(m)}:${p(ss)}` : `${p(m)}:${p(ss)}`;
 }
 
+// Durata compatta: 0:10, 1:30, 1:02:05
+export function fmtShort(sec) {
+  const s = Math.max(0, Math.round(sec));
+  return s >= 3600 ? fmt(s) : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
 export function fmtTenths(sec) {
   const t = Math.max(0, Math.floor(sec * 10));
   return `${fmt(Math.floor(t / 10))}.${t % 10}`;
