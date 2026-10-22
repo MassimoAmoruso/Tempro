@@ -46,15 +46,42 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .view { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
 /* --- Timer ------------------------------------------------------------ */
-.timer { padding: calc(env(safe-area-inset-top) + 14px) 20px 12px; justify-content: space-between; gap: 10px; }
+.timer { padding: 14px 20px 12px; justify-content: space-between; gap: 10px; }
 
 /* Aperta dall'icona sulla Home: iOS disegna la pagina sotto la barra di stato e sfuma quella zona.
    Si lascia sempre lo spazio della barra (anche se iOS non lo comunica) più un margine. */
+:root { --top-pad: calc(env(safe-area-inset-top) + 14px); }
+.timer { padding-top: var(--top-pad); }
 @media (display-mode: standalone) {
-  .timer { padding-top: calc(max(env(safe-area-inset-top), 54px) + 18px); }
+  :root { --top-pad: calc(max(env(safe-area-inset-top), 54px) + 18px); }
   .sessions { padding-top: calc(max(env(safe-area-inset-top), 54px) + 20px); }
   .sheet-panel { max-height: calc(100dvh - max(env(safe-area-inset-top), 54px) - 12px); }
+  .cam-bar { padding-top: 20px; }
 }
+
+/* --- Ripresa video ---------------------------------------------------- */
+.camera { position: fixed; inset: 0; z-index: 20; background: #000; display: flex; flex-direction: column; }
+.camera video { flex: 1; min-height: 0; width: 100%; object-fit: cover; }
+.cam-bar { flex: none; background: var(--card); border-radius: 24px 24px 0 0; margin-top: -24px; position: relative; padding: 20px 18px calc(env(safe-area-inset-bottom) + 18px); }
+.cam-bar h2 { font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
+.cam-bar p { color: var(--muted); font-size: 14px; line-height: 1.45; margin-top: 6px; }
+.cam-audio input { width: 20px; height: 20px; accent-color: var(--accent); }
+.btn:disabled { opacity: .4; }
+video.mirror { transform: scaleX(-1); }
+
+.cam-mini {
+  position: fixed; z-index: 5; right: 16px; top: calc(var(--top-pad) + 56px);
+  width: 72px; height: 96px; border-radius: 16px; overflow: hidden; background: #000;
+  box-shadow: 0 0 0 2px var(--card);
+}
+.cam-mini video { width: 100%; height: 100%; object-fit: cover; }
+.rec {
+  position: absolute; left: 50%; bottom: 6px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 999px;
+  background: rgba(0, 0, 0, .65); color: #fff; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.rec .dot { width: 7px; height: 7px; border-radius: 50%; background: #FF3B30; }
+.rec.paused .dot { background: #8A8F96; }
 
 .topbar { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; gap: 8px; }
 .title { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
@@ -109,11 +136,11 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 /* --- Tab bar ---------------------------------------------------------- */
 .tabbar {
   flex: none;
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px;
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px;
   margin: 0 20px calc(env(safe-area-inset-bottom) + 12px);
   padding: 6px; border-radius: 22px; background: #15171B;
 }
-.tab { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 0; border-radius: 16px; color: var(--muted); font-size: 11px; font-weight: 600; }
+.tab { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 0; border-radius: 16px; color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; min-width: 0; }
 .tab svg { width: 22px; height: 22px; }
 .tab.active { background: #23262C; color: var(--accent); }
 
@@ -123,6 +150,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 
 /* --- Elenco modelli --------------------------------------------------- */
 .sessions { overflow-y: auto; padding: calc(env(safe-area-inset-top) + 18px) 20px 24px; }
+.sessions > * { flex-shrink: 0; }   /* la pagina scorre: nessun elemento va schiacciato */
 .hint { color: var(--muted); font-size: 14px; margin-top: 8px; }
 .group-head { display: flex; align-items: center; justify-content: space-between; margin: 26px 0 10px; }
 .group-head h2 { font-size: 20px; font-weight: 700; }
@@ -134,6 +162,51 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .card .sum { color: var(--muted); font-size: 13px; margin-top: 2px; }
 .card .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .empty { color: var(--muted); font-size: 14px; padding: 4px 0; }
+
+.card.sub { background: var(--card2); margin: 8px 0 0; }
+.scheda { background: var(--card); border-radius: 18px; padding: 14px; margin-bottom: 10px; box-shadow: inset 0 0 0 1px var(--line); }
+.scheda.mine { box-shadow: none; }
+.scheda .name { font-size: 18px; font-weight: 700; }
+.scheda .sum { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.scheda .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.scheda-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.nota { background: rgba(198, 244, 50, .08); border-radius: 12px; padding: 10px 12px; color: var(--fg) !important; font-size: 14px; margin: 10px 0 0; }
+small.sum { color: var(--muted); font-size: 12px; }
+
+/* --- Andamento -------------------------------------------------------- */
+.page-title { font-size: 30px; font-weight: 800; letter-spacing: -.03em; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; margin-top: 14px; border-radius: 14px; background: var(--card); }
+.seg button { padding: 9px 0; border-radius: 10px; font-size: 14px; font-weight: 600; color: var(--muted); }
+.seg button[aria-selected=true] { background: #23262C; color: var(--fg); }
+.chips { display: flex; gap: 6px; overflow-x: auto; margin-top: 12px; padding-bottom: 2px; }
+.chip { flex: none; padding: 7px 12px; border-radius: 999px; background: var(--card); color: var(--muted); font-size: 13px; font-weight: 600; }
+.chip[aria-pressed=true] { background: var(--accent); color: var(--bg); }
+.tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+.tile { background: var(--card); border-radius: 18px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
+.tile-v { font-size: 28px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.tile-k { font-size: 12px; color: var(--muted); }
+.report-card { align-items: stretch; }
+.chart-title { font-size: 12px; font-weight: 600; color: var(--muted); margin-top: 12px; }
+.chart { margin: 4px 0 0; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .axis { fill: var(--muted); font-size: 10px; font-family: var(--font); }
+.chart .target { stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .dot { fill: var(--accent); stroke: var(--card); stroke-width: 2; }
+.chart .dot.on { r: 6; }
+.chart .hit { fill: transparent; cursor: pointer; }
+.chart-tip { font-size: 13px; color: var(--muted); margin-top: 4px; min-height: 18px; }
+.chart-empty { color: var(--muted); font-size: 13px; margin-top: 8px; }
+.sheet-panel .chart .dot { stroke: var(--card); }
+
+.scale { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 4px; }
+.scale .btn { padding: 12px 0; border-radius: 10px; font-size: 15px; }
+.scale .btn[aria-pressed=true] { background: var(--accent); color: var(--bg); }
+.share-text {
+  width: 100%; min-height: 120px; margin-top: 8px; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: inherit; font-size: 14px; resize: vertical;
+}
 
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 15px; font-weight: 600; padding: 10px 16px; border-radius: 999px; background: var(--card2); color: var(--fg); text-decoration: none; }
 .btn.primary { background: var(--accent); color: var(--bg); }

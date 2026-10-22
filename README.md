@@ -14,14 +14,39 @@ Pubblicata con GitHub Pages: https://massimoamoruso.github.io/Timer/timer/
 Per ogni tipo puoi creare più modelli (scheda **Modelli**) e associare a ciascuno un'immagine (link o foto dal telefono) e un link video, entrambi facoltativi.
 Dalle impostazioni puoi esportare e importare i modelli come file JSON.
 
+## Schede coach → atleta
+
+- **Coach**: in Modelli → **+ Nuova scheda** sceglie gli allenamenti, il nome della scheda, il proprio nome e una nota (facoltativi), poi **Condividi** (es. WhatsApp).
+- **Atleta**: tocca il link → anteprima → **Importa**. Le schede ricevute restano raggruppate in Modelli; se il coach invia una nuova versione della stessa scheda, l'app propone **Aggiorna**.
+- Su iPhone Safari e l'app sulla Home hanno memorie separate: se il link si apre in Safari, usare **Copia per l'app** e poi, nell'app, **Incolla una scheda o dei risultati**.
+- La scheda viaggia nella parte del link dopo `#`, che non viene inviata al server. Le foto caricate dal telefono non vengono condivise (i link sì).
+
+## Andamento e risultati
+
+- A fine allenamento il risultato viene salvato nello **storico** (solo sul telefono) e si apre **Com'è andata?** (fatica 1–10, ripetizioni, nota; facoltativi).
+- **Salva e invia al coach** prepara un messaggio con il riepilogo e un link; **Andamento → Invia al coach** invia tutti i risultati di una scheda.
+- Pagina **Andamento**: allenamenti della settimana/mese, giorni di fila, grafico per ogni allenamento, elenco delle sessioni.
+- **Lato coach**: aprendo il link dei risultati (o incollandolo) i dati finiscono in **Andamento → Atleti**, divisi per atleta; i doppioni vengono ignorati.
+- Il nome dell'atleta è facoltativo (Impostazioni → Coach).
+
+## Ripresa video dei lavori
+
+Nel modello, sezione **Video**: "Registra le fasi di lavoro", fotocamera (frontale/posteriore) e audio.
+All'avvio si apre l'inquadratura; durante l'allenamento si registra solo durante i lavori (in pausa nelle altre fasi) e alla fine si ottiene **un unico video** da salvare o scartare.
+Il video viene scritto temporaneamente sul telefono (IndexedDB) e cancellato dopo Salva/Scarta; se l'app si chiude prima, alla riapertura viene riproposto. Non viene mai inviato a server.
+L'app deve restare in primo piano durante la ripresa.
+
 ## Struttura
 
 ```
 index.html             pagina unica
 styles.css             grafica
 js/engine.js           motore del timer (senza UI)
-js/storage.js          salvataggio modelli e impostazioni
+js/storage.js          salvataggio di modelli, schede, storico, risultati atleti, impostazioni
 js/app.js              interfaccia
+js/recorder.js         ripresa video dei lavori
+js/share.js            link condivisibili (schede e risultati)
+js/report.js           andamento: grafici, statistiche, messaggi al coach
 sw.js                  cache offline (aggiornare VERSION ad ogni rilascio)
 manifest.webmanifest   installazione come app
 icons/                 icona dell'app (svg + png) e logo testuale (wordmark.svg)

@@ -71,24 +71,51 @@
 
     <section id="sessions-view" class="view sessions" hidden></section>
 
+    <section id="report-view" class="view sessions" hidden></section>
+
     <nav class="tabbar">
-      <button class="tab" data-tab="round">
+      <button class="tab" data-tab="round" aria-label="Round">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9M10 2h4"/></svg>
         Round
       </button>
-      <button class="tab" data-tab="tempo">
+      <button class="tab" data-tab="tempo" aria-label="Entro il tempo">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12M6 21h12M7 3c0 5 10 5 10 9s-10 4-10 9M17 3c0 5-10 5-10 9s10 4 10 9"/></svg>
-        Entro il tempo
+        A tempo
       </button>
-      <button class="tab" data-tab="cronometro">
+      <button class="tab" data-tab="cronometro" aria-label="Cronometro">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-        Cronometro
+        Crono
       </button>
-      <button class="tab" data-tab="sessioni">
+      <button class="tab" data-tab="sessioni" aria-label="Modelli e schede">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg>
         Modelli
       </button>
+      <button class="tab" data-tab="andamento" aria-label="Andamento">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="M4 16l5-6 4 3 7-8"/></svg>
+        Andamento
+      </button>
     </nav>
+  </div>
+
+  <div id="cam-mini" class="cam-mini" hidden>
+    <video id="cam-small" playsinline muted autoplay></video>
+    <span id="rec" class="rec"><span class="dot"></span><span id="rec-time">00:00</span></span>
+  </div>
+
+  <div id="camera" class="camera" hidden>
+    <video id="cam-full" playsinline muted autoplay></video>
+    <div class="cam-bar">
+      <h2>Inquadratura</h2>
+      <p id="cam-msg">Avvio della fotocamera…</p>
+      <div class="row">
+        <button id="cam-flip" class="btn">Cambia fotocamera</button>
+        <label class="btn cam-audio"><input id="cam-audio" type="checkbox"> Audio</label>
+      </div>
+      <div class="row">
+        <button id="cam-skip" class="btn">Senza video</button>
+        <button id="cam-go" class="btn primary" disabled>Inizia</button>
+      </div>
+    </div>
   </div>
 
   <div id="sheet" class="sheet" hidden>
