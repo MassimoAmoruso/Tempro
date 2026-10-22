@@ -1,4 +1,4 @@
-import { PHASES, fmt, fmtShort, fmtTenths, buildRoundPhases, buildCronoPhases, Sequence, TempoRunner } from './engine.js';
+import { PHASES, Clock, fmt, fmtShort, fmtTenths, buildRoundPhases, buildCronoPhases, Sequence, TempoRunner } from './engine.js';
 import * as db from './storage.js';
 import { WorkRecorder, cameraSupported, videoStore } from './recorder.js';
 import { encodeLink, decodeLink, isIosBrowser } from './share.js';
@@ -47,7 +47,8 @@ const FIELDS = {
   tempo: [
     ['prepara', 'dur', 'Prepara'],
     ['tempoTotale', 'dur', 'Tempo totale'],
-    ['obiettivo', 'num', 'Esecuzioni obiettivo'],
+    ['unita', 'unit', 'Obiettivo in'],
+    ['obiettivo', 'num', 'Obiettivo (ripetizioni o secondi)'],
     ['riposo', 'dur', 'Riposo dopo ogni serie'],
   ],
   cronometro: [
@@ -58,8 +59,13 @@ const FIELDS = {
 };
 const MIN = { lavoro: 1, roundPerCiclo: 1, cicli: 1, tempoTotale: 1, obiettivo: 1, durata: 1 };
 
+// Entro il tempo: l'obiettivo può essere in ripetizioni o in secondi (es. plank).
+const inSec = t => t.unita === 'secondi';
+const amount = (t, n) => (inSec(t) ? fmtShort(n) : String(n));
+const signed = (t, n) => (n > 0 ? '+' : n < 0 ? '−' : '') + amount(t, Math.abs(n));
+
 const RING = 2 * Math.PI * 136;   // circonferenza dell'anello (r=136 nel viewBox 300)
-const APP_VERSION = '8';          // da aggiornare insieme a VERSION in sw.js
+const APP_VERSION = '9';          // da aggiornare insieme a VERSION in sw.js
 
 let settings = db.getSettings();
 let mode;            // 'round' | 'tempo' | 'cronometro' | 'sessioni' | 'andamento'
@@ -80,6 +86,12 @@ let videoUrl = null;       // anteprima del video nel pannello di salvataggio
 const queue = [];
 let reportTab = 'miei';    // Andamento: 'miei' | 'atleti'
 let reportAtleta = null;
+
+// Scheda eseguita in sequenza: { scheda, ids, idx, results, cam, skipPrep }
+let schedaRun = null;
+// Riposo tra un allenamento e il successivo della scheda: { clock, dur }
+let transition = null;
+const TYPE_SHORT = { round: 'Round', tempo: 'A tempo', cronometro: 'Crono' };
 
 // --- Suoni, voce, vibrazione, schermo acceso -------------------------------
 
@@ -136,7 +148,13 @@ function countdown(key, remaining) {
 }
 
 let wakeLock = null;
-async function keepAwake(on) {
+let wakeChain = Promise.resolve();
+// Le richieste si eseguono in ordine: un "spegni" seguito subito da un "accendi" non si perdono.
+function keepAwake(on) {
+  wakeChain = wakeChain.then(() => setWake(on));
+  return wakeChain;
+}
+async function setWake(on) {
   try {
     if (on && !wakeLock && 'wakeLock' in navigator) {
       wakeLock = await navigator.wakeLock.request('screen');
@@ -167,6 +185,11 @@ function isRunning() {
 }
 
 function confirmStop() {
+  if (schedaRun) {
+    if (!confirm(`Uscire dalla scheda "${schedaRun.scheda.nome}"?`)) return false;
+    exitScheda();
+    return true;
+  }
   return !isActive() || confirm("Interrompere l'allenamento in corso?");
 }
 
@@ -210,9 +233,11 @@ function resetRunner() {
   laps = [];
   lastIdx = -1;
   beepKey = null;
-  if (tpl.tipo === 'round') runner = new Sequence(buildRoundPhases(tpl));
-  else if (tpl.tipo === 'tempo') runner = new TempoRunner(tpl);
-  else runner = new Sequence(buildCronoPhases(tpl));
+  // In una scheda, dopo il riposo tra gli allenamenti la "Prepara" non serve.
+  const t = schedaRun?.skipPrep ? { ...tpl, prepara: 0 } : tpl;
+  if (t.tipo === 'round') runner = new Sequence(buildRoundPhases(t));
+  else if (t.tipo === 'tempo') runner = new TempoRunner(t);
+  else runner = new Sequence(buildCronoPhases(t));
   runner.tpl = tpl;
   keepAwake(false);
   render();
@@ -220,6 +245,14 @@ function resetRunner() {
 
 function tick() {
   if (!runner) return;
+  if (transition) {
+    const rem = transition.dur - transition.clock.ms / 1000;
+    countdown(`tr${schedaRun.idx}`, rem);
+    if (rem <= 0) { transition = null; startTimer(); }
+    if (cam.active) cam.setWorking(false);
+    render();
+    return;
+  }
   if (tpl.tipo === 'tempo') {
     const r = runner;
     for (const e of r.update()) {
@@ -238,7 +271,8 @@ function tick() {
       announce('fine');
       keepAwake(false);
       finishSession(true);
-      endRecording();
+      if (schedaRun) advanceScheda();
+      else endRecording();
     } else {
       if (s.idx !== lastIdx) { lastIdx = s.idx; announce(s.phase.type); }
       countdown(s.idx, s.phaseRemaining);
@@ -278,8 +312,16 @@ function startTimer() {
 
 function onMain() {
   unlockMedia();
+  if (transition) {
+    if (transition.clock.running) { transition.clock.pause(); keepAwake(false); }
+    else { transition.clock.start(); keepAwake(true); }
+    render();
+    return;
+  }
   if (notStarted()) {
-    if (tpl.registra && cameraSupported()) openFraming();
+    // In una scheda l'inquadratura si chiede solo all'inizio: il video prosegue per tutta la scheda.
+    const wantsCam = schedaRun ? schedaRun.cam && !cam.active : tpl.registra;
+    if (wantsCam && cameraSupported()) openFraming();
     else startTimer();
     return;
   }
@@ -313,9 +355,20 @@ function onLeft() {
   render();
 }
 
-// Pulsante a destra: salta fase (Round).
+// Pulsante a destra: salta fase (Round), salta il riposo o passa al prossimo allenamento (scheda).
 function onAux() {
+  if (transition) {
+    transition = null;
+    startTimer();
+    return;
+  }
   if (tpl.tipo === 'round') runner.skip();
+  else if (schedaRun && tpl.tipo === 'cronometro' && !notStarted()) {
+    runner.clock.pause();
+    finishSession(true);
+    advanceScheda();
+    return;
+  }
   render();
 }
 
@@ -331,7 +384,59 @@ function onTempoFine() {
 function continueFine() {
   const i = runner.serie.findIndex(s => s.reps === null);
   if (i >= 0) openReps(i);
+  else if (schedaRun) advanceScheda();   // nella scheda si va avanti: i risultati sono in Andamento
   else openSummary();
+}
+
+// --- Scheda in sequenza -----------------------------------------------------
+
+function startScheda(s) {
+  const ids = s.modelli.filter(id => db.getTemplate(id));
+  if (!ids.length) { alert('La scheda non contiene allenamenti.'); return; }
+  if (isActive() && !confirm("Interrompere l'allenamento in corso?")) return;
+  schedaRun = { scheda: s, ids, idx: 0, results: [], cam: ids.some(id => db.getTemplate(id).registra), skipPrep: false };
+  transition = null;
+  showRunModel();
+}
+
+function showRunModel() {
+  const t = db.getTemplate(schedaRun.ids[schedaRun.idx]);
+  db.setSelected(t.tipo, t.id);
+  loadMode(t.tipo);
+}
+
+// Allenamento concluso: riposo del modello appena finito, poi parte il successivo da solo.
+function advanceScheda() {
+  const run = schedaRun, done = tpl;
+  run.idx++;
+  while (run.idx < run.ids.length && !db.getTemplate(run.ids[run.idx])) run.idx++;
+  if (run.idx >= run.ids.length) { finishScheda(); return; }
+  const rest = done.tipo === 'cronometro' ? 0 : done.riposo;
+  run.skipPrep = rest > 0;
+  showRunModel();
+  if (rest > 0) {
+    transition = { clock: new Clock(), dur: rest };
+    transition.clock.start();
+    announce('riposo');
+    keepAwake(true);
+    render();
+  } else startTimer();
+}
+
+function finishScheda() {
+  const run = schedaRun;
+  schedaRun = null;
+  transition = null;
+  endRecording();
+  if (run.results.length) enqueue(() => openFeedback(run.results, run.scheda.nome));
+  if (runner) render();
+}
+
+// Uscita anticipata: si salva quanto fatto finora.
+function exitScheda() {
+  if (!schedaRun) return;
+  if (runner && !transition) finishSession(sessionComplete());
+  finishScheda();
 }
 
 // --- Risultati --------------------------------------------------------------
@@ -345,14 +450,14 @@ function sessionComplete() {
 
 // Risultato dell'allenamento a partire dallo stato del timer.
 function buildResult(r, completo) {
-  const t = r.tpl, sch = db.schedaOf(t.id);
+  const t = r.tpl, sch = schedaRun?.scheda ?? db.schedaOf(t.id);
   const res = {
     id: r.resultId ??= db.uid(), data: r.startedAt ?? new Date().toISOString(), tipo: t.tipo,
     modello: db.templateKey(t), nome: t.nome, scheda: sch?.id ?? null, schedaNome: sch?.nome ?? '', completo,
   };
   if (t.tipo === 'tempo') {
     return {
-      ...res, fatte: r.totale, obiettivo: t.obiettivo, tempoTotale: t.tempoTotale,
+      ...res, unita: inSec(t) ? 'secondi' : null, fatte: r.totale, obiettivo: t.obiettivo, tempoTotale: t.tempoTotale,
       raggiuntoAl: r.obiettivoRaggiuntoAl(), serie: r.serie.map(s => s.reps ?? 0),
     };
   }
@@ -388,7 +493,9 @@ function finishSession(completo) {
   if (!hasWork(res)) return;
   r.recorded = true;
   try { db.saveResult(db.compact(res)); } catch { return; }
-  enqueue(() => openFeedback(res.id));
+  // In una scheda la valutazione si chiede una volta sola, alla fine.
+  if (schedaRun) schedaRun.results.push(res.id);
+  else enqueue(() => openFeedback([res.id]));
 }
 
 // Dopo una correzione delle serie (Entro il tempo) il risultato salvato si aggiorna.
@@ -407,14 +514,21 @@ function runQueue() {
   setTimeout(() => { if (!sheetKind && queue.length) queue.shift()(); }, 0);
 }
 
-function openFeedback(id) {
-  const res = db.getStorico().find(x => x.id === id);
-  if (!res) return;
-  const fromCoach = !!(res.scheda && db.getScheda(res.scheda)?.ricevuta);
-  const askReps = res.tipo !== 'tempo';
+// Valutazione di uno o più risultati (più risultati: una scheda intera).
+function openFeedback(ids, schedaNome = '') {
+  const storico = db.getStorico();
+  const list = ids.map(id => storico.find(x => x.id === id)).filter(Boolean);
+  if (!list.length) return;
+  const one = list.length === 1 ? list[0] : null;
+  const fromCoach = list.some(r => r.scheda && db.getScheda(r.scheda)?.ricevuta);
+  const askReps = one && one.tipo !== 'tempo';
+  const intro = one
+    ? `<p><b>${esc(one.nome)}</b> — ${esc(resultLine(one))}</p>`
+    : `<p><b>Scheda ${esc(schedaNome)}</b> · ${list.length} allenamenti</p>
+       ${list.map(r => `<div class="kv"><span>${esc(r.nome)}</span></div><p class="sum">${esc(resultLine(r))}</p>`).join('')}`;
   openSheet('feedback', `
     <h2>Com'è andata?</h2>
-    <p><b>${esc(res.nome)}</b> — ${esc(resultLine(res))}</p>
+    ${intro}
     <h3>Fatica (1 = facile, 10 = al limite)</h3>
     <div class="scale">${Array.from({ length: 10 }, (_, i) => `<button class="btn" data-f="${i + 1}" aria-pressed="false">${i + 1}</button>`).join('')}</div>
     ${askReps ? '<label class="field"><span>Ripetizioni totali (se le hai contate)</span><input type="number" inputmode="numeric" min="0" name="rip"></label>' : ''}
@@ -434,13 +548,16 @@ function openFeedback(id) {
     const save = () => {
       const rip = panel.querySelector('[name=rip]')?.value;
       const nota = panel.querySelector('[name=nota]').value.trim();
-      const upd = db.cleanResult({ ...res, fatica, ripetizioni: rip === '' || rip == null ? null : rip, nota });
-      if (upd) try { db.saveResult(upd); } catch { /* non critico */ }
-      return upd ?? res;
+      return list.map(res => {
+        const extra = askReps ? { ripetizioni: rip === '' || rip == null ? null : rip } : {};
+        const upd = db.cleanResult({ ...res, fatica, nota, ...extra });
+        if (upd) try { db.saveResult(upd); } catch { /* non critico */ }
+        return upd ?? res;
+      });
     };
     panel.querySelector('[data-act=skip]').onclick = closeSheet;
     panel.querySelector('[data-act=save]').onclick = () => { save(); closeSheet(); };
-    panel.querySelector('[data-act=coach]').onclick = () => { const r = save(); closeSheet(); sendToCoach([r]); };
+    panel.querySelector('[data-act=coach]').onclick = () => { const rs = save(); closeSheet(); sendToCoach(rs); };
   });
 }
 
@@ -523,9 +640,9 @@ function vmRound() {
 
 function vmTempo() {
   const r = runner, t = tpl, T = t.tempoTotale, tot = r.totale, diff = tot - t.obiettivo;
-  const fatte = { k: 'Fatte', v: String(tot), tap: r.serie.length ? openSeries : null };
-  const manca = diff < 0 ? { k: 'Mancano', v: String(-diff) } : { k: 'Oltre', v: `+${diff}`, type: 'lavoro' };
-  const obiettivo = { k: 'Obiettivo', v: String(t.obiettivo) };
+  const fatte = { k: inSec(t) ? 'Fatti' : 'Fatte', v: amount(t, tot), tap: r.serie.length ? openSeries : null };
+  const manca = diff < 0 ? { k: 'Mancano', v: amount(t, -diff) } : { k: 'Oltre', v: signed(t, diff), type: 'lavoro' };
+  const obiettivo = { k: 'Obiettivo', v: amount(t, t.obiettivo) };
   const riposo = { k: 'Riposo', v: fmtShort(t.riposo), type: 'riposo' };
   const base = { total: `Tempo rimasto ${fmt(r.totRemaining, { ceil: true })}`, left: null, aux: null };
   const pausable = { icon: r.paused ? 'play' : 'pause', label: r.paused ? 'Riprendi' : 'Pausa' };
@@ -533,7 +650,7 @@ function vmTempo() {
     case 'idle':
       return {
         ...base, type: t.prepara > 0 ? 'prepara' : 'lavoro', name: t.prepara > 0 ? 'PREPARA' : 'LAVORA',
-        time: fmt(t.prepara > 0 ? t.prepara : T), sub: `${t.obiettivo} esecuzioni in ${fmt(T)}`, frac: 1,
+        time: fmt(t.prepara > 0 ? t.prepara : T), sub: goalText(t), frac: 1,
         stats: [fatte, obiettivo, riposo], icon: 'play', label: 'Avvia',
       };
     case 'prepara':
@@ -561,7 +678,7 @@ function vmTempo() {
     default:
       return {
         ...base, total: 'Completato', type: diff >= 0 ? 'lavoro' : 'riposo', name: diff >= 0 ? 'OBIETTIVO OK' : 'FINE',
-        time: diff > 0 ? `+${diff}` : String(diff), sub: `${tot} su ${t.obiettivo} in ${fmt(T)}`,
+        time: diff ? signed(t, diff) : '0', sub: `${amount(t, tot)} su ${amount(t, t.obiettivo)} in ${fmt(T)}`,
         frac: Math.min(1, tot / t.obiettivo),
         stats: [fatte, manca, { k: 'Serie', v: String(r.serie.length), tap: r.serie.length ? openSummary : null }],
         icon: 'replay', label: 'Ricomincia',
@@ -571,7 +688,9 @@ function vmTempo() {
 
 function vmCrono() {
   const s = runner.state(), run = runner.clock.running, started = runner.clock.ms > 0, t = tpl;
-  const base = { left: null, aux: null, ...runLabel(run, started) };
+  // In una scheda il cronometro in avanti non finisce da solo: si passa al prossimo a mano.
+  const next = schedaRun && t.direzione !== 'indietro' ? { icon: 'skip', label: 'Prossimo allenamento', disabled: !started } : null;
+  const base = { left: null, aux: next, ...runLabel(run, started) };
   const prepara = !s.done && s.phase.type === 'prepara';
   const prep = prepara
     ? { type: 'prepara', name: 'PREPARA', time: fmt(s.phaseRemaining, { ceil: true }), sub: run || !started ? 'Si parte tra poco' : 'In pausa', frac: s.phaseRemaining / s.phase.duration }
@@ -618,6 +737,21 @@ function vmCrono() {
   };
 }
 
+function vmTransition() {
+  const rem = Math.max(0, transition.dur - transition.clock.ms / 1000), run = transition.clock.running;
+  return {
+    type: 'riposo', name: 'RIPOSA', time: fmt(rem, { ceil: true }), sub: `Poi: ${tpl.nome}`,
+    frac: rem / transition.dur, total: 'Riposo tra gli allenamenti',
+    stats: [
+      { k: 'Prossimo', v: String(schedaRun.idx + 1), of: `/${schedaRun.ids.length}` },
+      { k: 'Tipo', v: TYPE_SHORT[tpl.tipo] },
+      { k: 'Riposo', v: fmtShort(transition.dur), type: 'riposo' },
+    ],
+    icon: run ? 'pause' : 'play', label: run ? 'Pausa' : 'Riprendi',
+    left: null, aux: { icon: 'skip', label: 'Inizia subito' },
+  };
+}
+
 // --- Rendering --------------------------------------------------------------
 
 const setText = (id, text) => { const e = $(id); if (e.textContent !== text) e.textContent = text; };
@@ -646,7 +780,12 @@ function renderSide(id, b) {
 
 function render() {
   if (!runner) return;
-  const v = view = tpl.tipo === 'round' ? vmRound() : tpl.tipo === 'tempo' ? vmTempo() : vmCrono();
+  const v = view = transition ? vmTransition() : tpl.tipo === 'round' ? vmRound() : tpl.tipo === 'tempo' ? vmTempo() : vmCrono();
+  $('run-bar').hidden = !schedaRun;
+  if (schedaRun) {
+    const n = schedaRun.ids.length, i = schedaRun.idx, next = db.getTemplate(schedaRun.ids[i + 1] ?? '');
+    setText('run-text', `${schedaRun.scheda.nome} · ${i + 1} di ${n}${next ? ` · poi: ${next.nome}` : ' · ultimo'}`);
+  }
   setPhase(v.type);
   setText('tpl-name', tpl.nome);
   setText('total-time', v.total);
@@ -752,14 +891,14 @@ $('cam-go').addEventListener('click', () => {
     try { db.saveTemplate(tpl); } catch { /* non critico */ }
   }
   closeFraming();
-  cam.begin(tpl.nome);
+  cam.begin(schedaRun ? schedaRun.scheda.nome : tpl.nome);
   $('rec-time').textContent = '00:00';
   $('cam-mini').hidden = false;
   startTimer();
 });
 
 async function endRecording() {
-  if (!cam.active) return;
+  if (!cam.active || schedaRun) return;   // in una scheda il video prosegue fino alla fine
   $('cam-mini').hidden = true;
   $('cam-small').srcObject = null;
   try {
@@ -832,13 +971,17 @@ async function openVideoSheet(meta) {
 function openReps(i) {
   const r = runner;
   const fine = r.stato === 'fine';
+  const sec = inSec(r.tpl);
   const prev = r.serie.slice(0, i).reverse().find(s => s.reps !== null);
-  const val = r.serie[i].reps ?? prev?.reps ?? 0;
+  // In secondi si propone la durata cronometrata della serie; in ripetizioni il valore della serie prima.
+  const measured = Math.round(r.serie[i].fine - r.serie[i].inizio);
+  const val = r.serie[i].reps ?? (sec ? measured : prev?.reps ?? 0);
   openSheet('reps', `
     <div class="reps">
       <h2>Serie ${i + 1}</h2>
-      <p>Quante esecuzioni hai fatto?${fine ? '' : ' Il riposo è già partito.'}</p>
-      <input id="reps-val" class="reps-num" type="number" inputmode="numeric" min="0" value="${val}" aria-label="Esecuzioni">
+      <p>${sec ? `Quanti secondi hai tenuto? Cronometrati: ${fmtShort(measured)}.` : 'Quante esecuzioni hai fatto?'}${fine ? '' : ' Il riposo è già partito.'}</p>
+      <input id="reps-val" class="reps-num" type="number" inputmode="numeric" min="0" value="${val}" aria-label="${sec ? 'Secondi' : 'Esecuzioni'}">
+      ${sec ? '<p>secondi</p>' : ''}
       <div class="reps-btns">
         <button class="btn" data-d="-5">−5</button><button class="btn" data-d="-1">−1</button>
         <button class="btn" data-d="1">+1</button><button class="btn" data-d="5">+5</button>
@@ -866,9 +1009,10 @@ function openReps(i) {
 }
 
 function serieTable(r) {
+  const t = r.tpl;
   const rows = r.serie.map((s, i) => `
-    <tr data-i="${i}"><td>${i + 1}</td><td>${s.reps ?? '–'}</td><td>${fmt(s.fine - s.inizio)}</td><td>${fmt(s.fine)}</td></tr>`).join('');
-  return `<table class="serie"><tr><th>Serie</th><th>Esecuzioni</th><th>Durata</th><th>Al minuto</th></tr>${rows}</table>
+    <tr data-i="${i}"><td>${i + 1}</td><td>${s.reps == null ? '–' : amount(t, s.reps)}</td><td>${fmt(s.fine - s.inizio)}</td><td>${fmt(s.fine)}</td></tr>`).join('');
+  return `<table class="serie"><tr><th>Serie</th><th>${inSec(t) ? 'Tenuti' : 'Esecuzioni'}</th><th>Durata</th><th>Al minuto</th></tr>${rows}</table>
     <p>Tocca una serie per correggerla.</p>`;
 }
 
@@ -885,13 +1029,14 @@ function openSeries() {
 function openSummary() {
   const r = runner, t = tpl, tot = r.totale, diff = tot - t.obiettivo;
   const al = r.obiettivoRaggiuntoAl();
-  const res = diff > 0 ? `+${diff} oltre l'obiettivo` : diff === 0 ? 'Obiettivo centrato' : `${-diff} in meno`;
-  const media = r.serie.length ? (tot / r.serie.length).toFixed(1).replace('.', ',') : '0';
+  const res = diff > 0 ? `${signed(t, diff)} oltre l'obiettivo` : diff === 0 ? 'Obiettivo centrato' : `${amount(t, -diff)} in meno`;
+  const mean = r.serie.length ? tot / r.serie.length : 0;
+  const media = inSec(t) ? fmtShort(mean) : mean.toFixed(1).replace('.', ',');
   openSheet('summary', `
     <h2>Risultato · ${esc(t.nome)}</h2>
     <div class="result ${diff >= 0 ? 'ok' : 'ko'}">${res}</div>
-    <div class="kv"><span>Esecuzioni fatte</span><b>${tot}</b></div>
-    <div class="kv"><span>Obiettivo</span><b>${t.obiettivo} in ${fmt(t.tempoTotale)}</b></div>
+    <div class="kv"><span>${inSec(t) ? 'Tempo di esercizio' : 'Esecuzioni fatte'}</span><b>${amount(t, tot)}</b></div>
+    <div class="kv"><span>Obiettivo</span><b>${amount(t, t.obiettivo)} in ${fmt(t.tempoTotale)}</b></div>
     ${al !== null ? `<div class="kv"><span>Obiettivo raggiunto a</span><b>${fmt(al)}</b></div>` : ''}
     <div class="kv"><span>Serie</span><b>${r.serie.length}</b></div>
     <div class="kv"><span>Media per serie</span><b>${media}</b></div>
@@ -927,12 +1072,16 @@ function openMedia() {
   openSheet('media', html);
 }
 
+function goalText(t) {
+  return inSec(t) ? `${fmtShort(t.obiettivo)} di esercizio in ${fmt(t.tempoTotale)}` : `${t.obiettivo} esecuzioni in ${fmt(t.tempoTotale)}`;
+}
+
 function summary(t) {
   if (t.tipo === 'round') {
     const total = buildRoundPhases(t).reduce((a, p) => a + p.duration, 0);
     return `Lavoro ${fmtShort(t.lavoro)} · Riposo ${fmtShort(t.riposo)} · ${t.roundPerCiclo} round × ${t.cicli} ${t.cicli === 1 ? 'ciclo' : 'cicli'} · Totale ${fmt(total)}`;
   }
-  if (t.tipo === 'tempo') return `${t.obiettivo} esecuzioni in ${fmt(t.tempoTotale)} · Riposo ${fmtShort(t.riposo)}`;
+  if (t.tipo === 'tempo') return `${goalText(t)} · Riposo ${fmtShort(t.riposo)}`;
   return t.direzione === 'indietro' ? `Conto alla rovescia ${fmt(t.durata)}` : 'Cronometro in avanti con giri';
 }
 
@@ -994,6 +1143,12 @@ function fieldHtml([k, kind, label], t) {
   }
   if (kind === 'num') {
     return `<label class="field"><span>${label}</span><input type="number" inputmode="numeric" min="${MIN[k] ?? 0}" name="${k}" value="${t[k]}"></label>`;
+  }
+  if (kind === 'unit') {
+    return `<label class="field"><span>${label}</span><select name="${k}">
+      <option value="ripetizioni"${t[k] !== 'secondi' ? ' selected' : ''}>Ripetizioni</option>
+      <option value="secondi"${t[k] === 'secondi' ? ' selected' : ''}>Secondi</option>
+    </select></label>`;
   }
   return `<label class="field"><span>${label}</span><select name="${k}">
       <option value="avanti"${t[k] === 'avanti' ? ' selected' : ''}>In avanti (con giri)</option>
@@ -1089,13 +1244,13 @@ function openEditor(t, isNew) {
 
 // --- Elenco modelli ---------------------------------------------------------
 
-function templateCard(t, { compact = false } = {}) {
+function templateCard(t, { compact = false, n = 0 } = {}) {
   const img = safeImg(t.immagine);
   const id = esc(t.id);
   return `<div class="card${compact ? ' sub' : ''}">
     ${img ? `<div class="thumb" style="background-image:${esc(cssUrl(img))}"></div>` : ''}
     <div class="info">
-      <div class="name">${esc(t.nome)}</div>
+      <div class="name">${n ? `${n}. ` : ''}${esc(t.nome)}</div>
       <div class="sum">${esc(db.TYPES[t.tipo].nome)} · ${esc(summary(t))}${t.video ? ' · video esercizio' : ''}${t.registra ? ' · ripresa dei lavori' : ''}</div>
       <div class="actions">
         <button class="btn small primary" data-act="start" data-id="${id}">Avvia</button>
@@ -1120,7 +1275,8 @@ function schedaCard(s) {
         <button class="btn small danger" data-act="sch-del" data-id="${id}">Elimina</button>
       </div>
       ${s.nota ? `<p class="nota">${esc(s.nota)}</p>` : ''}
-      ${modelli.map(t => templateCard(t, { compact: true })).join('')}
+      ${modelli.length ? `<button class="btn block primary" data-act="sch-run" data-id="${id}">Avvia scheda (${modelli.length} in sequenza)</button>` : ''}
+      ${modelli.map((t, i) => templateCard(t, { compact: true, n: i + 1 })).join('')}
     </div>`;
   }
   return `<div class="scheda mine">
@@ -1130,9 +1286,10 @@ function schedaCard(s) {
         <div class="sum">Creata da te${s.coach ? ` · coach ${esc(s.coach)}` : ''} · ${modelli.length} allenamenti</div>
       </div>
     </div>
-    <div class="sum">${modelli.map(t => esc(t.nome)).join(' · ') || 'Nessun allenamento'}</div>
+    <div class="sum">${modelli.map((t, i) => `${i + 1}. ${esc(t.nome)}`).join(' · ') || 'Nessun allenamento'}</div>
     <div class="actions">
-      <button class="btn small primary" data-act="sch-share" data-id="${id}">Condividi</button>
+      ${modelli.length ? `<button class="btn small primary" data-act="sch-run" data-id="${id}">Avvia scheda</button>` : ''}
+      <button class="btn small" data-act="sch-share" data-id="${id}">Condividi</button>
       <button class="btn small" data-act="sch-edit" data-id="${id}">Modifica</button>
       <button class="btn small danger" data-act="sch-del" data-id="${id}">Elimina</button>
     </div>
@@ -1174,6 +1331,7 @@ $('sessions-view').addEventListener('click', e => {
     case 'sch-new': openSchedaEditor(null); break;
     case 'sch-edit': openSchedaEditor(s); break;
     case 'sch-share': shareScheda(s); break;
+    case 'sch-run': startScheda(s); break;
     case 'sch-del': {
       const msg = s.ricevuta
         ? `Eliminare la scheda "${s.nome}" e i suoi allenamenti? Il tuo storico resta.`
@@ -1203,6 +1361,9 @@ function openSchedaEditor(s) {
       <label class="field"><span>Nome</span><input type="text" name="nome" value="${esc(sc.nome)}" maxlength="60" placeholder="Es. Settimana 1"></label>
       <label class="field"><span>Coach</span><input type="text" name="coach" value="${esc(sc.coach)}" maxlength="40" placeholder="Facoltativo"></label>
       <label class="field"><span>Nota</span><input type="text" name="nota" value="${esc(sc.nota)}" maxlength="500" placeholder="Facoltativa"></label>
+      <h3>Ordine di esecuzione</h3>
+      <p>Con "Avvia scheda" gli allenamenti partono uno dopo l'altro in quest'ordine; tra uno e l'altro c'è il riposo dell'allenamento appena finito.</p>
+      <div id="sch-order"></div>
       <h3>Allenamenti</h3>
       <p>Scegli gli allenamenti da includere. Le foto caricate dal telefono non vengono inviate; i link a immagini e video sì.</p>
       ${groups || '<p>Crea prima qualche modello.</p>'}
@@ -1212,11 +1373,35 @@ function openSchedaEditor(s) {
         <button type="submit" class="btn primary">Salva</button>
       </div>
     </form>`, panel => {
-    const form = panel.querySelector('#sch');
+    const form = panel.querySelector('#sch'), box = panel.querySelector('#sch-order');
+    let order = sc.modelli.filter(id => personal.some(t => t.id === id));
+    const drawOrder = () => {
+      box.innerHTML = order.length ? order.map((id, i) => `
+        <div class="order-row">
+          <span class="order-n">${i + 1}</span>
+          <span class="order-name">${esc(db.getTemplate(id).nome)}</span>
+          <button type="button" class="btn small" data-move="${i}" data-d="-1" aria-label="Sposta su"${i === 0 ? ' disabled' : ''}>↑</button>
+          <button type="button" class="btn small" data-move="${i}" data-d="1" aria-label="Sposta giù"${i === order.length - 1 ? ' disabled' : ''}>↓</button>
+        </div>`).join('') : '<p>Nessun allenamento scelto.</p>';
+    };
+    drawOrder();
+    box.onclick = e => {
+      const b = e.target.closest('[data-move]');
+      if (!b) return;
+      const i = Number(b.dataset.move), j = i + Number(b.dataset.d);
+      [order[i], order[j]] = [order[j], order[i]];
+      drawOrder();
+    };
+    form.querySelectorAll('[name=m]').forEach(c => {
+      c.onchange = () => {
+        order = c.checked ? order.concat(c.value) : order.filter(id => id !== c.value);
+        drawOrder();
+      };
+    });
     form.onsubmit = e => {
       e.preventDefault();
       const fd = new FormData(form);
-      const modelli = fd.getAll('m').map(String);
+      const modelli = order.slice();
       const err = panel.querySelector('#sch-err');
       if (!modelli.length) { err.textContent = 'Scegli almeno un allenamento.'; return; }
       const out = {
@@ -1576,7 +1761,15 @@ $('btn-reset').addEventListener('click', () => {
   resetRunner();
 });
 $('btn-settings').addEventListener('click', openSettings);
-$('btn-title').addEventListener('click', openPicker);
+$('btn-title').addEventListener('click', () => {
+  if (schedaRun) return;   // durante una scheda l'ordine è quello della scheda
+  openPicker();
+});
+$('run-exit').addEventListener('click', () => {
+  if (!schedaRun || !confirm(`Uscire dalla scheda "${schedaRun.scheda.nome}"? Quanto fatto finora resta nello storico.`)) return;
+  exitScheda();
+  resetRunner();
+});
 $('btn-media').addEventListener('click', openMedia);
 [1, 2, 3].forEach(i => $(`stat-${i}`).addEventListener('click', () => view?.stats[i - 1]?.tap?.()));
 $('sheet').addEventListener('click', e => {

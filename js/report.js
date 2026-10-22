@@ -17,7 +17,10 @@ export function seriesFor(results) {
     name, ...opts,
     points: rs.filter(r => get(r) != null).map(r => ({ y: get(r), r })),
   });
-  if (tipo === 'tempo') return pick('Esecuzioni', r => r.fatte ?? 0, { target: rs.at(-1).obiettivo });
+  if (tipo === 'tempo') {
+    const sec = rs.at(-1).unita === 'secondi';
+    return pick(sec ? 'Secondi' : 'Esecuzioni', r => r.fatte ?? 0, { target: rs.at(-1).obiettivo, time: sec });
+  }
   if (tipo === 'round') {
     if (rs.some(r => r.ripetizioni != null)) return pick('Ripetizioni', r => r.ripetizioni);
     if (rs.some(r => r.fatica != null)) return pick('Fatica (1–10)', r => r.fatica, { min: 0, max: 10 });
@@ -83,7 +86,8 @@ export function resultLine(r) {
   let s;
   if (r.tipo === 'tempo') {
     const diff = (r.fatte ?? 0) - (r.obiettivo ?? 0);
-    s = `${r.fatte ?? 0} su ${r.obiettivo ?? 0} (${diff >= 0 ? '+' : ''}${diff})`;
+    const v = n => (r.unita === 'secondi' ? fmtShort(n) : String(n));
+    s = `${v(r.fatte ?? 0)} su ${v(r.obiettivo ?? 0)} (${diff ? `${diff > 0 ? '+' : '−'}${v(Math.abs(diff))}` : 'obiettivo centrato'})`;
     if (r.raggiuntoAl != null) s += `, obiettivo a ${fmt(r.raggiuntoAl)}`;
     if (r.serie?.length) s += `, ${r.serie.length} serie`;
   } else if (r.tipo === 'round') {

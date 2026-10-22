@@ -20,7 +20,7 @@ export const TYPES = {
   },
   tempo: {
     nome: 'Entro il tempo',
-    defaults: () => ({ prepara: 10, tempoTotale: 600, obiettivo: 100, riposo: 30 }),
+    defaults: () => ({ prepara: 10, tempoTotale: 600, unita: 'ripetizioni', obiettivo: 100, riposo: 30 }),
   },
   cronometro: {
     nome: 'Cronometro',
@@ -64,6 +64,7 @@ export function cleanTemplate(m) {
   out.audio = m.audio !== false;
   for (const k of Object.keys(TYPES[m.tipo].defaults())) {
     if (k === 'direzione') out[k] = m[k] === 'indietro' ? 'indietro' : 'avanti';
+    else if (k === 'unita') out[k] = m[k] === 'secondi' ? 'secondi' : 'ripetizioni';
     else if (k in m) out[k] = clampInt(m[k], ...LIMITS[k]);
   }
   return out;
@@ -77,6 +78,7 @@ export function cleanResult(r) {
     id: r.id, data: new Date(r.data).toISOString(), tipo: r.tipo,
     modello: str(r.modello, 64), nome: str(r.nome, 40), scheda: r.scheda ? str(r.scheda, 64) : null,
     schedaNome: str(r.schedaNome, 60), completo: !!r.completo,
+    unita: r.unita === 'secondi' ? 'secondi' : null,
     fatte: num(r.fatte, 1e6), obiettivo: num(r.obiettivo, 1e6), tempoTotale: num(r.tempoTotale, 86400),
     raggiuntoAl: num(r.raggiuntoAl, 86400),
     serie: Array.isArray(r.serie) ? r.serie.slice(0, 500).map(x => clampInt(x, 0, 1e5)) : null,

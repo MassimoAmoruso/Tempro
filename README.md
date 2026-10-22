@@ -21,6 +21,17 @@ Dalle impostazioni puoi esportare e importare i modelli come file JSON.
 - Su iPhone Safari e l'app sulla Home hanno memorie separate: se il link si apre in Safari, usare **Copia per l'app** e poi, nell'app, **Incolla una scheda o dei risultati**.
 - La scheda viaggia nella parte del link dopo `#`, che non viene inviata al server. Le foto caricate dal telefono non vengono condivise (i link sì).
 
+### Eseguire una scheda in sequenza
+
+- Nell'editor della scheda si imposta l'**ordine di esecuzione** (frecce ↑↓); per le schede ricevute vale l'ordine del coach.
+- **Avvia scheda** esegue gli allenamenti uno dopo l'altro: tra uno e l'altro parte il **riposo dell'allenamento appena concluso** (il Cronometro non ha riposo), poi il successivo parte da solo senza "Prepara".
+- In alto la barra "Scheda · 2 di 4 · poi: …" con **Esci**. Il cronometro in avanti passa al successivo con il pulsante ⏭.
+- "Com'è andata?" compare una volta sola a fine scheda; con la ripresa attiva si registra un unico video di tutti i lavori.
+
+## Entro il tempo: ripetizioni o secondi
+
+Nel modello si sceglie **Obiettivo in: Ripetizioni / Secondi**. In secondi (es. plank) a fine serie viene proposta la durata cronometrata della serie, modificabile; riepiloghi, grafici e messaggi mostrano i tempi.
+
 ## Andamento e risultati
 
 - A fine allenamento il risultato viene salvato nello **storico** (solo sul telefono) e si apre **Com'è andata?** (fatica 1–10, ripetizioni, nota; facoltativi).
