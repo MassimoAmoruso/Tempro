@@ -58,16 +58,6 @@ export function buildRoundPhases(t) {
   return out;
 }
 
-// Round rimasti nel ciclo corrente e cicli rimasti (compreso quello in corso).
-export function roundStats(phases, idx, t) {
-  const cur = phases[idx];
-  if (!cur || cur.type === 'rinfrescati') return { round: 0, cicli: 0 };
-  let ciclo = cur.ciclo ?? 1;
-  if (cur.type === 'riposoCicli') ciclo += 1;
-  const round = phases.slice(idx).filter(p => p.type === 'lavoro' && p.ciclo === ciclo).length;
-  return { round, cicli: Math.max(0, t.cicli - ciclo + 1) };
-}
-
 export function buildCronoPhases(t) {
   const out = [];
   if (t.prepara > 0) out.push({ type: 'prepara', duration: t.prepara });

@@ -1,5 +1,6 @@
 // Salvataggio locale (solo su questo dispositivo): modelli, impostazioni, selezione.
 // Nessun dato personale, nessun server.
+// Le chiavi restano "timer.*" anche dopo il cambio di nome in Tempro, per non perdere i modelli già salvati.
 
 const KEY_TPL = 'timer.modelli.v1';
 const KEY_SET = 'timer.impostazioni.v1';
@@ -79,7 +80,7 @@ export function duplicateTemplate(id) {
 }
 
 export function exportJSON() {
-  return JSON.stringify({ app: 'timer-allenamento', versione: 1, modelli: templates }, null, 2);
+  return JSON.stringify({ app: 'tempro', versione: 1, modelli: templates }, null, 2);
 }
 
 // Importa modelli da un backup: vengono aggiunti con nuovi id. Ritorna quanti.
