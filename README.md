@@ -1,4 +1,3 @@
-
 # Tempro
 
 Web app (PWA) per il telefono: timer a round (Tabata), lavoro entro il tempo con obiettivo, cronometro e conto alla rovescia.
@@ -32,7 +31,7 @@ icons/                 icona dell'app (svg + png) e logo testuale (wordmark.svg)
 
 1. Cambia `VERSION` in `sw.js` (es. `tempro-v3`), così i telefoni scaricano la nuova versione.
 2. Su GitHub, nella cartella `timer` del repository, carica i file modificati (**Add file → Upload files**), mantenendo le cartelle `js` e `icons`.
-3. Dopo 1-2 minuti ricarica l'app sul telefono (a volte servono due aperture perché si aggiorni).
+3. Dopo 1-2 minuti riapri l'app sul telefono: con la rete attiva carica subito la versione nuova (senza rete usa l'ultima salvata).
 
 ## Provarla sul computer
 

@@ -1,6 +1,6 @@
 // Service worker: rende l'app utilizzabile offline.
 // Ad ogni rilascio aggiornare VERSION per forzare il rinnovo della cache.
-const VERSION = 'tempro-v4';
+const VERSION = 'tempro-v5';
 const ASSETS = [
   './',
   'index.html',
@@ -40,12 +40,21 @@ self.addEventListener('fetch', e => {
   const sameOrigin = url.origin === self.location.origin;
   if (!sameOrigin && !FONT_HOSTS.includes(url.hostname)) return;   // immagini/video esterni: rete
 
-  // Cache prima, aggiornamento in background (stale-while-revalidate).
   e.respondWith(caches.open(VERSION).then(async cache => {
-    const cached = await cache.match(request, { ignoreSearch: sameOrigin });
-    const network = fetch(request)
-      .then(res => { if (res.ok || res.type === 'opaque') cache.put(request, res.clone()); return res; })
-      .catch(() => cached);
-    return cached || network;
+    // Font: cache prima (non cambiano). File dell'app: rete prima, così un aggiornamento
+    // si vede subito; senza rete si usa la copia in cache.
+    if (!sameOrigin) {
+      const cached = await cache.match(request);
+      if (cached) return cached;
+    }
+    try {
+      const res = await fetch(request);
+      if (res.ok || res.type === 'opaque') cache.put(request, res.clone());
+      return res;
+    } catch (err) {
+      const cached = await cache.match(request, { ignoreSearch: sameOrigin });
+      if (cached) return cached;
+      throw err;
+    }
   }));
 });
