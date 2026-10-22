@@ -59,6 +59,7 @@ const FIELDS = {
 const MIN = { lavoro: 1, roundPerCiclo: 1, cicli: 1, tempoTotale: 1, obiettivo: 1, durata: 1 };
 
 const RING = 2 * Math.PI * 136;   // circonferenza dell'anello (r=136 nel viewBox 300)
+const APP_VERSION = '8';          // da aggiornare insieme a VERSION in sw.js
 
 let settings = db.getSettings();
 let mode;            // 'round' | 'tempo' | 'cronometro' | 'sessioni' | 'andamento'
@@ -1531,7 +1532,8 @@ function openSettings() {
     <h3>Storico</h3>
     <p>I risultati degli allenamenti restano solo su questo telefono.</p>
     <button class="btn block danger" data-act="clear-sto">Cancella il mio storico</button>
-    <button class="btn block primary" data-act="close">Chiudi</button>`, panel => {
+    <button class="btn block primary" data-act="close">Chiudi</button>
+    <p style="text-align:center">Tempro · versione ${APP_VERSION}</p>`, panel => {
     panel.querySelectorAll('.toggle input').forEach(inp => {
       inp.onchange = () => { settings = { ...settings, [inp.name]: inp.checked }; db.saveSettings(settings); };
     });
@@ -1606,5 +1608,22 @@ handleIncoming(location.hash, true);
 addEventListener('hashchange', () => handleIncoming(location.hash, true));
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('sw.js')
+    .then(reg => {
+      // Ogni volta che si torna all'app si controlla se è stata pubblicata una versione nuova.
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') reg.update().catch(() => {});
+      });
+    })
+    .catch(() => {});
+  // Versione nuova attiva: si ricarica la pagina, ma mai durante un allenamento.
+  let pendingReload = false;
+  const reloadIfIdle = () => { if (pendingReload && !isActive() && !sheetKind) location.reload(); };
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) return;   // primo avvio: nessuna versione precedente
+    pendingReload = true;
+    reloadIfIdle();
+  });
+  setInterval(reloadIfIdle, 5000);
 }

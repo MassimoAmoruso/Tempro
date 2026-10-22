@@ -3,7 +3,7 @@
 Web app (PWA) per il telefono: timer a round (Tabata), lavoro entro il tempo con obiettivo, cronometro e conto alla rovescia.
 Nessun server e nessun dato personale: i modelli sono salvati solo nel browser del dispositivo (`localStorage`).
 
-Pubblicata con GitHub Pages: https://massimoamoruso.github.io/Timer/timer/
+Pubblicata con GitHub Pages dal repository `MassimoAmoruso/Tempro` (file nella radice): https://massimoamoruso.github.io/Tempro/
 
 ## Modalità
 
