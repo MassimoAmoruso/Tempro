@@ -1,6 +1,6 @@
 // Service worker: rende l'app utilizzabile offline.
 // Ad ogni rilascio aggiornare VERSION per forzare il rinnovo della cache.
-const VERSION = 'tempro-v12';   // aggiornare insieme a APP_VERSION in js/app.js
+const VERSION = 'tempro-v13';   // aggiornare insieme a APP_VERSION in js/app.js
 const ASSETS = [
   './',
   'index.html',

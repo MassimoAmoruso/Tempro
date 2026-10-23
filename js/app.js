@@ -20,7 +20,31 @@ const ICONS = {
   flag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>',
   image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="1.5"/><path d="M21 16l-5-5-8 8"/></svg>',
   video: '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>',
+  reset: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v4.5h4.5"/></svg>',
+  close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  paste: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="12" height="17" rx="2.5"/><path d="M9 4.5V3.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1M9.5 11h5M9.5 15h5"/></svg>',
+  playSmall: '<svg viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/></svg>',
 };
+
+// Conferma dentro l'app, al posto della finestra del browser. Risolve con true se si conferma.
+function ask(text, { ok = 'Conferma', danger = false } = {}) {
+  return new Promise(resolve => {
+    const box = $('ask'), yes = $('ask-yes'), no = $('ask-no');
+    $('ask-text').textContent = text;
+    yes.textContent = ok;
+    yes.className = `btn ${danger ? 'danger-solid' : 'primary'}`;
+    box.hidden = false;
+    const done = v => {
+      box.hidden = true;
+      yes.onclick = no.onclick = box.onclick = null;
+      resolve(v);
+    };
+    yes.onclick = () => done(true);
+    no.onclick = () => done(false);
+    box.onclick = e => { if (e.target === box) done(false); };
+    yes.focus();
+  });
+}
 
 const WORDMARK = `<span class="wordmark" role="img" aria-label="Tempro">Tempr<svg aria-hidden="true" viewBox="0 0 100 100">
   <circle cx="50" cy="50" r="36" fill="none" stroke="#2A2D34" stroke-width="22"/>
@@ -65,7 +89,7 @@ const amount = (t, n) => (inSec(t) ? fmtShort(n) : String(n));
 const signed = (t, n) => (n > 0 ? '+' : n < 0 ? '−' : '') + amount(t, Math.abs(n));
 
 const RING = 2 * Math.PI * 136;   // circonferenza dell'anello (r=136 nel viewBox 300)
-const APP_VERSION = '12';          // da aggiornare insieme a VERSION in sw.js
+const APP_VERSION = '13';          // da aggiornare insieme a VERSION in sw.js
 
 let settings = db.getSettings();
 let mode;            // 'round' | 'tempo' | 'cronometro' | 'sessioni' | 'andamento'
@@ -184,13 +208,13 @@ function isRunning() {
   return runner.clock.running;
 }
 
-function confirmStop() {
+async function confirmStop() {
   if (schedaRun) {
-    if (!confirm(`Uscire dalla scheda "${schedaRun.scheda.nome}"?`)) return false;
+    if (!(await ask(`Uscire dalla scheda "${schedaRun.scheda.nome}"? Quanto fatto finora resta nello storico.`, { ok: 'Esci', danger: true }))) return false;
     exitScheda();
     return true;
   }
-  return !isActive() || confirm("Interrompere l'allenamento in corso?");
+  return !isActive() || ask("Interrompere l'allenamento in corso? Quanto fatto finora resta nello storico.", { ok: 'Interrompi', danger: true });
 }
 
 function setPhase(type) {
@@ -342,32 +366,34 @@ function onMain() {
   render();
 }
 
-// Pulsante a sinistra: pausa durante il lavoro (Entro il tempo) o giro (Cronometro).
-function onLeft() {
+// Pulsanti ai lati del principale: ognuno porta l'azione da eseguire (vedi i modelli di vista).
+async function onSide(act) {
   unlockMedia();
-  if (tpl.tipo === 'tempo' && isActive()) {
-    if (runner.paused) { runner.resume(); keepAwake(true); }
-    else { runner.pause(); keepAwake(false); }
-  } else if (tpl.tipo === 'cronometro' && runner.clock.running) {
-    const s = runner.state();
-    if (!s.done && s.phase.type === 'cronometro') { laps.push(s.phaseElapsed); audio.beep(1200, 0.06); }
-  }
-  render();
-}
-
-// Pulsante a destra: salta fase (Round), salta il riposo o passa al prossimo allenamento (scheda).
-function onAux() {
-  if (transition) {
-    transition = null;
-    startTimer();
-    return;
-  }
-  if (tpl.tipo === 'round') runner.skip();
-  else if (schedaRun && tpl.tipo === 'cronometro' && !notStarted()) {
-    runner.clock.pause();
-    finishSession(true);
-    advanceScheda();
-    return;
+  switch (act) {
+    case 'pause':   // Entro il tempo: pausa durante il lavoro (il principale è "Fine serie")
+      runner.pause();
+      keepAwake(false);
+      break;
+    case 'lap': {   // Cronometro in avanti: giro
+      const s = runner.state();
+      if (runner.clock.running && !s.done && s.phase.type === 'cronometro') { laps.push(s.phaseElapsed); audio.beep(1200, 0.06); }
+      break;
+    }
+    case 'skip':    // Round: salta fase
+      runner.skip();
+      break;
+    case 'skip-rest':   // Scheda: salta il riposo tra gli allenamenti
+      transition = null;
+      startTimer();
+      return;
+    case 'next':    // Scheda: il cronometro in avanti passa al prossimo allenamento
+      runner.clock.pause();
+      finishSession(true);
+      advanceScheda();
+      return;
+    case 'reset':   // In pausa: azzera
+      if (await ask('Azzerare il timer? Quanto fatto finora resta nello storico.', { ok: 'Azzera', danger: true })) resetRunner();
+      return;
   }
   render();
 }
@@ -390,10 +416,10 @@ function continueFine() {
 
 // --- Scheda in sequenza -----------------------------------------------------
 
-function startScheda(s) {
+async function startScheda(s) {
   const ids = s.modelli.filter(id => db.getTemplate(id));
   if (!ids.length) { alert('La scheda non contiene allenamenti.'); return; }
-  if (isActive() && !confirm("Interrompere l'allenamento in corso?")) return;
+  if (!(await confirmStop())) return;
   schedaRun = { scheda: s, ids, idx: 0, results: [], cam: ids.some(id => db.getTemplate(id).registra), skipPrep: false };
   transition = null;
   showRunModel();
@@ -618,7 +644,7 @@ const runLabel = (run, started) => ({ icon: run ? 'pause' : 'play', label: run ?
 
 function vmRound() {
   const s = runner.state(), started = runner.clock.ms > 0, t = tpl;
-  const aux = { icon: 'skip', label: 'Salta fase', disabled: !started || s.done };
+  const aux = { icon: 'skip', label: 'Salta fase', act: 'skip', disabled: !started || s.done };
   if (s.done) {
     return {
       type: 'fine', name: 'FINE', time: fmt(0), sub: `Totale ${fmt(runner.total)}`, frac: 1, total: 'Completato',
@@ -671,11 +697,12 @@ function vmTempo() {
     case 'lavoro':
       return {
         ...base, type: 'lavoro', name: 'LAVORA',
-        time: fmt(r.totRemaining, { ceil: true }), sub: r.paused ? 'In pausa' : 'Premi ✓ a fine serie',
+        time: fmt(r.totRemaining, { ceil: true }), sub: r.paused ? 'In pausa' : "Tocca l'anello a fine serie",
         frac: r.totRemaining / T,
         stats: [fatte, manca, { k: `Serie ${r.serie.length + 1}`, v: fmtShort(r.serieElapsed) }],
-        icon: r.paused ? 'play' : 'check', label: r.paused ? 'Riprendi' : 'Fatto',
-        left: r.paused ? null : { icon: 'pause', label: 'Pausa' },
+        icon: r.paused ? 'play' : 'check', label: r.paused ? 'Riprendi' : `Fine serie ${r.serie.length + 1}`,
+        text: r.paused ? null : `Fine serie ${r.serie.length + 1}`,
+        left: r.paused ? null : { icon: 'pause', label: 'Pausa', act: 'pause' },
       };
     case 'riposo':
       return {
@@ -698,7 +725,7 @@ function vmTempo() {
 function vmCrono() {
   const s = runner.state(), run = runner.clock.running, started = runner.clock.ms > 0, t = tpl;
   // In una scheda il cronometro in avanti non finisce da solo: si passa al prossimo a mano.
-  const next = schedaRun && t.direzione !== 'indietro' ? { icon: 'skip', label: 'Prossimo allenamento', disabled: !started } : null;
+  const next = schedaRun && t.direzione !== 'indietro' ? { icon: 'skip', label: 'Prossimo allenamento', act: 'next', disabled: !started } : null;
   const base = { left: null, aux: next, ...runLabel(run, started) };
   const prepara = !s.done && s.phase.type === 'prepara';
   const prep = prepara
@@ -716,7 +743,7 @@ function vmCrono() {
         { k: 'Ultimo giro', v: durs.length ? fmtTenths(durs.at(-1)) : '–' },
         { k: 'Migliore', v: durs.length ? fmtTenths(Math.min(...durs)) : '–', type: durs.length ? 'lavoro' : null },
       ],
-      left: { icon: 'flag', label: 'Giro', disabled: !(run && !prepara) },
+      left: { icon: 'flag', label: 'Giro', act: 'lap', disabled: !(run && !prepara) },
     };
     if (prep) return { ...v, ...prep };
     return {
@@ -757,7 +784,7 @@ function vmTransition() {
       { k: 'Riposo', v: fmtShort(transition.dur), type: 'riposo' },
     ],
     icon: run ? 'pause' : 'play', label: run ? 'Pausa' : 'Riprendi',
-    left: null, aux: { icon: 'skip', label: 'Inizia subito' },
+    left: null, aux: { icon: 'skip', label: 'Inizia subito', act: 'skip-rest' },
   };
 }
 
@@ -778,12 +805,15 @@ function renderStat(i, st) {
   $(`stat-${i}`).classList.toggle('tappable', !!st.tap);
 }
 
+// Un pulsante non disponibile si nasconde (resta il suo spazio, così il principale non si sposta).
 function renderSide(id, b) {
   const node = $(id);
-  node.style.visibility = b ? '' : 'hidden';
-  if (!b) return;
+  const show = b && !b.disabled;
+  node.style.visibility = show ? '' : 'hidden';
+  node.disabled = !show;
+  if (!show) return;
   setIcon(node, b.icon);
-  node.disabled = !!b.disabled;
+  node.dataset.act = b.act;
   node.setAttribute('aria-label', b.label);
 }
 
@@ -807,9 +837,18 @@ function render() {
   arc.setAttribute('stroke-dasharray', `${(RING * frac).toFixed(1)} ${RING.toFixed(1)}`);
   arc.style.opacity = frac > 0.002 ? '1' : '0';
   v.stats.forEach((st, i) => renderStat(i + 1, st));
-  setIcon($('btn-main'), v.icon);
-  $('btn-main').setAttribute('aria-label', v.label);
-  renderSide('btn-left', v.left);
+  const main = $('btn-main'), key = `${v.icon}|${v.text ?? ''}`;
+  if (main.dataset.key !== key) {
+    main.innerHTML = (ICONS[v.icon] ?? '') + (v.text ? `<span>${esc(v.text)}</span>` : '');
+    main.dataset.key = key;
+    main.classList.toggle('wide', !!v.text);
+  }
+  main.setAttribute('aria-label', v.label);
+  // Il tocco sull'anello fa l'azione principale, tranne a fine allenamento (non deve ricominciare per sbaglio).
+  $('ring').setAttribute('aria-label', v.icon === 'replay' ? `${v.name} ${v.time}` : `${v.label} — ${v.name} ${v.time}`);
+  // Azzera compare a sinistra solo con il timer in pausa a metà allenamento.
+  const left = !transition && isActive() && !isRunning() ? { icon: 'reset', label: 'Azzera', act: 'reset' } : v.left;
+  renderSide('btn-left', left);
   renderSide('btn-aux', v.aux);
   if (cam.active) {
     setText('rec-time', fmt(cam.recordedSec));
@@ -817,13 +856,12 @@ function render() {
   }
 }
 
+// Foto e video dell'esercizio: pulsante nell'intestazione, visibile solo se il modello li ha.
 function updateMedia() {
-  const img = safeImg(tpl.immagine), vid = safeUrl(tpl.video);
-  $('btn-media').hidden = !img && !vid;
-  const thumb = $('media-thumb');
-  thumb.style.backgroundImage = img ? cssUrl(img) : '';
-  thumb.innerHTML = img ? '' : ICONS.video;
-  $('media-sub').textContent = img && vid ? 'Guarda foto e video' : img ? 'Guarda la foto' : 'Guarda il video';
+  const has = !!(safeImg(tpl.immagine) || safeUrl(tpl.video));
+  const b = $('btn-media');
+  b.style.visibility = has ? '' : 'hidden';
+  b.disabled = !has;
 }
 
 // --- Pannelli (sheet) -------------------------------------------------------
@@ -832,7 +870,8 @@ function openSheet(kind, html, mount, { dismissable = true } = {}) {
   sheetKind = kind;
   sheetDismiss = dismissable;
   const panel = $('sheet-panel');
-  panel.innerHTML = html;
+  // I pannelli che si possono chiudere hanno sempre la ✕ in alto, raggiungibile anche se sono lunghi.
+  panel.innerHTML = (dismissable ? `<button class="sheet-x" data-act="close" aria-label="Chiudi">${ICONS.close}</button>` : '') + html;
   panel.scrollTop = 0;
   $('sheet').hidden = false;
   panel.querySelectorAll('[data-act=close]').forEach(b => { b.onclick = closeSheet; });
@@ -970,7 +1009,7 @@ async function openVideoSheet(meta) {
       saved();
     };
     panel.querySelector('[data-act=discard]').onclick = async () => {
-      if (!confirm('Eliminare il video? Non potrà essere recuperato.')) return;
+      if (!(await ask('Eliminare il video? Non potrà essere recuperato.', { ok: 'Elimina', danger: true }))) return;
       await videoStore.remove(meta.id).catch(() => {});
       closeSheet();
     };
@@ -1117,8 +1156,8 @@ function openPicker() {
       <button class="btn primary" data-act="new">+ Nuovo</button>
     </div>`, panel => {
     panel.querySelectorAll('.card[data-id]').forEach(b => {
-      b.onclick = () => {
-        if (!confirmStop()) return;
+      b.onclick = async () => {
+        if (!(await confirmStop())) return;
         closeSheet();
         db.setSelected(tpl.tipo, b.dataset.id);
         loadMode(mode);
@@ -1260,19 +1299,23 @@ function openEditor(t, isNew) {
 
 // --- Elenco modelli ---------------------------------------------------------
 
+let modelsFilter = 'tutti';   // Modelli: 'tutti' | 'schede' | tipo di modello
+
+// Scheda di un modello: un tocco sul nome apre la modifica; restano in vista solo Avvia e ⋯.
 function templateCard(t, { compact = false, n = 0 } = {}) {
   const img = safeImg(t.immagine);
   const id = esc(t.id);
+  const extra = `${t.video ? ' · video esercizio' : ''}${t.registra ? ' · ripresa dei lavori' : ''}`;
   return `<div class="card${compact ? ' sub' : ''}">
     ${img ? `<div class="thumb" style="background-image:${esc(cssUrl(img))}"></div>` : ''}
     <div class="info">
-      <div class="name">${n ? `${n}. ` : ''}${esc(t.nome)}</div>
-      <div class="sum">${esc(db.TYPES[t.tipo].nome)} · ${esc(summary(t))}${t.video ? ' · video esercizio' : ''}${t.registra ? ' · ripresa dei lavori' : ''}</div>
+      <button class="card-main" data-act="edit" data-id="${id}" aria-label="Modifica ${esc(t.nome)}">
+        <span class="name">${n ? `${n}. ` : ''}${esc(t.nome)}</span>
+        <span class="sum">${esc(db.TYPES[t.tipo].nome)} · ${esc(summary(t))}${extra}</span>
+      </button>
       <div class="actions">
-        <button class="btn small primary" data-act="start" data-id="${id}">Avvia</button>
-        <button class="btn small" data-act="edit" data-id="${id}">Modifica</button>
-        ${compact ? '' : `<button class="btn small" data-act="dup" data-id="${id}">Duplica</button>
-        <button class="btn small danger" data-act="del" data-id="${id}">Elimina</button>`}
+        <button class="btn primary" data-act="start" data-id="${id}">${ICONS.playSmall} Avvia</button>
+        <button class="btn icon" data-act="menu" data-id="${id}" aria-label="Altre azioni per ${esc(t.nome)}">⋯</button>
       </div>
     </div>
   </div>`;
@@ -1281,53 +1324,132 @@ function templateCard(t, { compact = false, n = 0 } = {}) {
 function schedaCard(s) {
   const modelli = s.modelli.map(db.getTemplate).filter(Boolean);
   const id = esc(s.id);
+  const run = modelli.length ? `<button class="btn primary" data-act="sch-run" data-id="${id}">${ICONS.playSmall} Avvia scheda</button>` : '';
+  const menu = `<button class="btn icon" data-act="sch-menu" data-id="${id}" aria-label="Altre azioni per la scheda ${esc(s.nome)}">⋯</button>`;
   if (s.ricevuta) {
     return `<div class="scheda">
-      <div class="scheda-head">
-        <div>
-          <div class="name">${esc(s.nome)}</div>
-          <div class="sum">${s.coach ? `da ${esc(s.coach)} · ` : 'Ricevuta · '}${modelli.length} allenamenti · aggiornata il ${esc(dateLabel(s.data))}</div>
-        </div>
-        <button class="btn small danger" data-act="sch-del" data-id="${id}">Elimina</button>
-      </div>
+      <div class="name">${esc(s.nome)}</div>
+      <div class="sum">${s.coach ? `da ${esc(s.coach)} · ` : 'Ricevuta · '}${modelli.length} allenamenti · aggiornata il ${esc(dateLabel(s.data))}</div>
       ${s.nota ? `<p class="nota">${esc(s.nota)}</p>` : ''}
-      ${modelli.length ? `<button class="btn block primary" data-act="sch-run" data-id="${id}">Avvia scheda (${modelli.length} in sequenza)</button>` : ''}
+      <div class="actions">${run}${menu}</div>
       ${modelli.map((t, i) => templateCard(t, { compact: true, n: i + 1 })).join('')}
     </div>`;
   }
   return `<div class="scheda mine">
-    <div class="scheda-head">
-      <div>
-        <div class="name">${esc(s.nome)}</div>
-        <div class="sum">Creata da te${s.coach ? ` · coach ${esc(s.coach)}` : ''} · ${modelli.length} allenamenti</div>
-      </div>
-    </div>
-    <div class="sum">${modelli.map((t, i) => `${i + 1}. ${esc(t.nome)}`).join(' · ') || 'Nessun allenamento'}</div>
+    <button class="card-main" data-act="sch-edit" data-id="${id}" aria-label="Modifica la scheda ${esc(s.nome)}">
+      <span class="name">${esc(s.nome)}</span>
+      <span class="sum">Creata da te${s.coach ? ` · coach ${esc(s.coach)}` : ''} · ${modelli.length} allenamenti</span>
+      <span class="sum">${modelli.map((t, i) => `${i + 1}. ${esc(t.nome)}`).join(' · ') || 'Nessun allenamento'}</span>
+    </button>
     <div class="actions">
-      ${modelli.length ? `<button class="btn small primary" data-act="sch-run" data-id="${id}">Avvia scheda</button>` : ''}
-      <button class="btn small" data-act="sch-share" data-id="${id}">Condividi</button>
-      <button class="btn small" data-act="sch-edit" data-id="${id}">Modifica</button>
-      <button class="btn small danger" data-act="sch-del" data-id="${id}">Elimina</button>
+      ${run}
+      <button class="btn" data-act="sch-share" data-id="${id}">Condividi</button>
+      ${menu}
     </div>
   </div>`;
 }
 
 function renderSessions() {
   const schede = db.getSchede();
-  let html = `${WORDMARK}<p class="hint">Modelli e schede salvati solo su questo telefono.</p>
-    <button class="btn block" data-act="paste">Incolla una scheda o dei risultati ricevuti</button>
-    <div class="group-head"><h2>Schede</h2>
-      <button class="btn small primary" data-act="sch-new">+ Nuova scheda</button></div>`;
-  html += schede.length
-    ? schede.map(schedaCard).join('')
-    : '<div class="empty">Una scheda raggruppa più allenamenti da inviare a un atleta. Le schede ricevute dal coach compaiono qui.</div>';
-  for (const [tipo, def] of Object.entries(db.TYPES)) {
-    const list = db.getTemplates(tipo).filter(t => !db.isReceived(t.id));
-    html += `<div class="group-head"><h2>${def.nome}</h2>
-      <button class="btn small primary" data-act="new" data-tipo="${tipo}">+ Nuovo</button></div>`;
-    html += list.length ? list.map(t => templateCard(t)).join('') : '<div class="empty">Nessun modello.</div>';
+  const byType = Object.fromEntries(Object.keys(db.TYPES).map(tipo => [tipo, db.getTemplates(tipo).filter(t => !db.isReceived(t.id))]));
+  const counts = { schede: schede.length, ...Object.fromEntries(Object.entries(byType).map(([k, l]) => [k, l.length])) };
+  if (modelsFilter !== 'tutti' && !counts[modelsFilter]) modelsFilter = 'tutti';
+  const show = k => modelsFilter === 'tutti' || modelsFilter === k;
+  const filters = [['tutti', 'Tutti'], ['schede', 'Schede'], ['round', 'Round'], ['tempo', 'A tempo'], ['cronometro', 'Crono']]
+    .filter(([k]) => k === 'tutti' || counts[k]);
+
+  let html = `<div class="page-head">
+      ${WORDMARK}
+      <div class="head-actions">
+        <button class="round-btn" data-act="paste" aria-label="Incolla una scheda o dei risultati ricevuti">${ICONS.paste}</button>
+        <button class="btn primary" data-act="new-any">+ Nuovo</button>
+      </div>
+    </div>
+    <p class="hint">Modelli e schede salvati solo su questo telefono.</p>`;
+  if (filters.length > 2) {
+    html += `<div class="chips">${filters.map(([k, label]) =>
+      `<button class="chip" data-act="filter" data-k="${k}" aria-pressed="${modelsFilter === k}">${label}</button>`).join('')}</div>`;
+  }
+  if (show('schede') && schede.length) {
+    html += `<h2 class="section-title">Schede</h2>${schede.map(schedaCard).join('')}`;
+  }
+  const tipi = Object.keys(db.TYPES).filter(k => show(k) && counts[k]);
+  if (tipi.length) {
+    if (modelsFilter === 'tutti') html += '<h2 class="section-title">Modelli</h2>';
+    for (const tipo of tipi) {
+      html += `<h3 class="section-sub">${db.TYPES[tipo].nome}</h3>${byType[tipo].map(t => templateCard(t)).join('')}`;
+    }
+  }
+  if (!schede.length && !tipi.length) {
+    html += '<p class="hint">Nessun modello. Tocca <b>+ Nuovo</b> per crearne uno.</p>';
   }
   $('sessions-view').innerHTML = html;
+}
+
+// "+ Nuovo": prima si sceglie cosa creare.
+function openNewChooser() {
+  const opt = (k, title, desc) => `<button class="choice" data-k="${k}"><b>${title}</b><span>${desc}</span></button>`;
+  openSheet('new', `
+    <h2>Nuovo</h2>
+    ${opt('round', 'Round', 'Lavoro e riposo a tempo fisso, per round e cicli (es. Tabata)')}
+    ${opt('tempo', 'Entro il tempo', 'Un obiettivo di ripetizioni o secondi in un tempo massimo')}
+    ${opt('cronometro', 'Cronometro', 'In avanti con i giri, oppure conto alla rovescia')}
+    ${opt('scheda', 'Scheda', 'Più allenamenti da eseguire in sequenza o da inviare a un atleta')}`, panel => {
+    panel.querySelectorAll('.choice').forEach(b => {
+      b.onclick = () => {
+        if (b.dataset.k === 'scheda') openSchedaEditor(null);
+        else openEditor(db.newTemplate(b.dataset.k), true);
+      };
+    });
+  });
+}
+
+// Menu ⋯ di un modello.
+function openTemplateMenu(t) {
+  const received = db.isReceived(t.id);
+  openSheet('menu', `
+    <h2>${esc(t.nome)}</h2>
+    <button class="choice" data-k="start"><b>Avvia</b></button>
+    <button class="choice" data-k="edit"><b>Modifica</b></button>
+    <button class="choice" data-k="dup"><b>Duplica</b><span>${received ? 'Crea una copia tra i tuoi modelli' : 'Crea una copia da modificare'}</span></button>
+    ${received ? '' : '<button class="choice danger" data-k="del"><b>Elimina</b></button>'}`, panel => {
+    panel.querySelectorAll('.choice').forEach(b => {
+      b.onclick = async () => {
+        switch (b.dataset.k) {
+          case 'start': closeSheet(); db.setSelected(t.tipo, t.id); loadMode(t.tipo); break;
+          case 'edit': openEditor(t, false); break;
+          case 'dup': closeSheet(); db.duplicateTemplate(t.id); renderSessions(); break;
+          case 'del':
+            if (!(await ask(`Eliminare "${t.nome}"?`, { ok: 'Elimina', danger: true }))) return;
+            closeSheet();
+            db.deleteTemplate(t.id);
+            renderSessions();
+            break;
+        }
+      };
+    });
+  });
+}
+
+// Menu ⋯ di una scheda.
+function openSchedaMenu(s) {
+  openSheet('menu', `
+    <h2>${esc(s.nome)}</h2>
+    ${s.ricevuta ? '' : '<button class="choice" data-k="edit"><b>Modifica</b><span>Nome, coach, nota e ordine degli allenamenti</span></button>'}
+    <button class="choice danger" data-k="del"><b>Elimina scheda</b><span>${s.ricevuta ? 'Elimina anche i suoi allenamenti; il tuo storico resta' : 'Gli allenamenti restano tra i tuoi modelli'}</span></button>`, panel => {
+    panel.querySelectorAll('.choice').forEach(b => {
+      b.onclick = async () => {
+        if (b.dataset.k === 'edit') { openSchedaEditor(s); return; }
+        const msg = s.ricevuta
+          ? `Eliminare la scheda "${s.nome}" e i suoi allenamenti? Il tuo storico resta.`
+          : `Eliminare la scheda "${s.nome}"? Gli allenamenti restano tra i tuoi modelli.`;
+        if (!(await ask(msg, { ok: 'Elimina', danger: true }))) return;
+        closeSheet();
+        db.deleteScheda(s.id);
+        renderSessions();
+      };
+    });
+  });
 }
 
 $('sessions-view').addEventListener('click', e => {
@@ -1336,25 +1458,16 @@ $('sessions-view').addEventListener('click', e => {
   const t = db.getTemplate(b.dataset.id);
   const s = db.getScheda(b.dataset.id);
   switch (b.dataset.act) {
-    case 'new': openEditor(db.newTemplate(b.dataset.tipo), true); break;
+    case 'new-any': openNewChooser(); break;
+    case 'filter': modelsFilter = b.dataset.k; renderSessions(); break;
     case 'start': db.setSelected(t.tipo, t.id); loadMode(t.tipo); break;
     case 'edit': openEditor(t, false); break;
-    case 'dup': db.duplicateTemplate(t.id); renderSessions(); break;
-    case 'del':
-      if (confirm(`Eliminare "${t.nome}"?`)) { db.deleteTemplate(t.id); renderSessions(); }
-      break;
+    case 'menu': openTemplateMenu(t); break;
     case 'paste': openPaste(); break;
-    case 'sch-new': openSchedaEditor(null); break;
     case 'sch-edit': openSchedaEditor(s); break;
     case 'sch-share': shareScheda(s); break;
     case 'sch-run': startScheda(s); break;
-    case 'sch-del': {
-      const msg = s.ricevuta
-        ? `Eliminare la scheda "${s.nome}" e i suoi allenamenti? Il tuo storico resta.`
-        : `Eliminare la scheda "${s.nome}"? Gli allenamenti restano tra i tuoi modelli.`;
-      if (confirm(msg)) { db.deleteScheda(s.id); renderSessions(); }
-      break;
-    }
+    case 'sch-menu': openSchedaMenu(s); break;
   }
 });
 
@@ -1686,8 +1799,8 @@ function openDetail(key, own) {
       };
     });
     panel.querySelectorAll('[data-del]').forEach(b => {
-      b.onclick = () => {
-        if (!confirm('Eliminare questa sessione dallo storico?')) return;
+      b.onclick = async () => {
+        if (!(await ask('Eliminare questa sessione dallo storico?', { ok: 'Elimina', danger: true }))) return;
         db.deleteResult(b.dataset.del);
         closeSheet();
         renderReport();
@@ -1756,8 +1869,8 @@ function openSession(id, own, back) {
     if (!own) return;
     b('[data-act=rate]').onclick = () => { closeSheet(); openFeedback([r.id]); };
     b('[data-act=send]').onclick = () => { closeSheet(); sendToCoach([r]); };
-    b('[data-act=del]').onclick = () => {
-      if (!confirm('Eliminare questa sessione dallo storico?')) return;
+    b('[data-act=del]').onclick = async () => {
+      if (!(await ask('Eliminare questa sessione dallo storico?', { ok: 'Elimina', danger: true }))) return;
       db.deleteResult(r.id);
       closeSheet();
       renderReport();
@@ -1794,7 +1907,8 @@ $('report-view').addEventListener('click', e => {
       break;
     }
     case 'del-atleta':
-      if (confirm(`Eliminare tutti i risultati di ${reportAtleta} da questo telefono?`)) { db.deleteAtleta(reportAtleta); renderReport(); }
+      ask(`Eliminare tutti i risultati di ${reportAtleta} da questo telefono?`, { ok: 'Elimina', danger: true })
+        .then(ok => { if (ok) { db.deleteAtleta(reportAtleta); renderReport(); } });
       break;
   }
 });
@@ -1849,8 +1963,8 @@ function openSettings() {
       settings = { ...settings, nomeAtleta: e.target.value.trim().slice(0, 40), nomeChiesto: true };
       db.saveSettings(settings);
     };
-    panel.querySelector('[data-act=clear-sto]').onclick = () => {
-      if (!confirm('Cancellare tutti i risultati dei tuoi allenamenti? Non si possono recuperare.')) return;
+    panel.querySelector('[data-act=clear-sto]').onclick = async () => {
+      if (!(await ask('Cancellare tutti i risultati dei tuoi allenamenti? Non si possono recuperare.', { ok: 'Cancella', danger: true }))) return;
       db.clearStorico();
       if (mode === 'andamento') renderReport();
       closeSheet();
@@ -1877,20 +1991,18 @@ function openSettings() {
 // --- Avvio ------------------------------------------------------------------
 
 $('btn-main').addEventListener('click', onMain);
-$('btn-left').addEventListener('click', onLeft);
-$('btn-aux').addEventListener('click', onAux);
-$('btn-reset').addEventListener('click', () => {
-  if (isActive() && !confirm('Azzerare il timer?')) return;
-  resetRunner();
+$('ring').addEventListener('click', () => {
+  if (view?.icon !== 'replay') onMain();   // a fine allenamento il tocco sull'anello non ricomincia
 });
+$('btn-left').addEventListener('click', e => onSide(e.currentTarget.dataset.act));
+$('btn-aux').addEventListener('click', e => onSide(e.currentTarget.dataset.act));
 $('btn-settings').addEventListener('click', openSettings);
 $('btn-title').addEventListener('click', () => {
   if (schedaRun) return;   // durante una scheda l'ordine è quello della scheda
   openPicker();
 });
-$('run-exit').addEventListener('click', () => {
-  if (!schedaRun || !confirm(`Uscire dalla scheda "${schedaRun.scheda.nome}"? Quanto fatto finora resta nello storico.`)) return;
-  exitScheda();
+$('run-exit').addEventListener('click', async () => {
+  if (!schedaRun || !(await confirmStop())) return;
   resetRunner();
 });
 $('btn-media').addEventListener('click', openMedia);
@@ -1899,8 +2011,8 @@ $('sheet').addEventListener('click', e => {
   if (e.target.id === 'sheet' && sheetDismiss) closeSheet();
 });
 document.querySelectorAll('.tab').forEach(b => {
-  b.addEventListener('click', () => {
-    if (b.dataset.tab === mode || !confirmStop()) return;
+  b.addEventListener('click', async () => {
+    if (b.dataset.tab === mode || !(await confirmStop())) return;
     loadMode(b.dataset.tab);
   });
 });

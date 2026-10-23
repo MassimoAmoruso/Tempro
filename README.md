@@ -5,6 +5,13 @@ Nessun server e nessun dato personale: i modelli sono salvati solo nel browser d
 
 Pubblicata con GitHub Pages dal repository `MassimoAmoruso/Tempro` (file nella radice): https://massimoamoruso.github.io/Tempro/
 
+## Uso rapido
+
+- **Tocca l'anello** per avviare o mettere in pausa (in "Entro il tempo" per chiudere la serie); a fine allenamento il tocco non ricomincia.
+- **Azzera** compare accanto ai comandi solo con il timer in pausa.
+- Il pulsante in alto a destra apre **foto e video dell'esercizio** (se il modello li ha).
+- Nella pagina **Modelli**: tocca un modello per modificarlo, **⋯** per Duplica/Elimina, **+ Nuovo** per scegliere cosa creare, l'icona appunti per incollare schede o risultati ricevuti.
+
 ## Modalità
 
 - **Round**: Prepara → [Lavoro → Riposo] × round per ciclo → Riposo tra i cicli → … × cicli → Rinfrescati.

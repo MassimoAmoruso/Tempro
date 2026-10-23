@@ -28,8 +28,8 @@
           <span id="tpl-name"></span>
           <span id="total-time"></span>
         </button>
-        <button id="btn-reset" class="round-btn" aria-label="Azzera">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v4.5h4.5"/></svg>
+        <button id="btn-media" class="round-btn media-btn" aria-label="Foto e video dell'esercizio">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z" fill="currentColor"/></svg>
         </button>
       </header>
 
@@ -40,15 +40,18 @@
 
       <div class="dial">
         <div class="pill"><span class="dot"></span><span id="phase-label"></span></div>
-        <div class="ring">
-          <svg viewBox="0 0 300 300" aria-hidden="true">
-            <circle class="track" cx="150" cy="150" r="136"/>
-            <circle id="ring-arc" class="arc" cx="150" cy="150" r="136" transform="rotate(-90 150 150)"/>
-          </svg>
-          <div class="ring-text">
-            <div id="phase-time"></div>
-            <div id="phase-sub"></div>
-          </div>
+        <div class="ring-box">
+          <!-- Tutto l'anello è un pulsante: un tocco equivale al pulsante principale. -->
+          <button id="ring" class="ring">
+            <svg viewBox="0 0 300 300" aria-hidden="true">
+              <circle class="track" cx="150" cy="150" r="136"/>
+              <circle id="ring-arc" class="arc" cx="150" cy="150" r="136" transform="rotate(-90 150 150)"/>
+            </svg>
+            <span class="ring-text">
+              <span id="phase-time"></span>
+              <span id="phase-sub"></span>
+            </span>
+          </button>
         </div>
       </div>
 
@@ -57,15 +60,6 @@
         <button id="stat-2" class="stat"><span id="stat-2-k" class="stat-k"></span><span class="stat-v"><span id="stat-2-v"></span><span id="stat-2-of" class="of"></span></span></button>
         <button id="stat-3" class="stat"><span id="stat-3-k" class="stat-k"></span><span class="stat-v"><span id="stat-3-v"></span><span id="stat-3-of" class="of"></span></span></button>
       </div>
-
-      <button id="btn-media" class="exercise" hidden>
-        <span id="media-thumb" class="ex-thumb"></span>
-        <span class="ex-text">
-          <span class="ex-title">Esercizio</span>
-          <span id="media-sub" class="ex-sub"></span>
-        </span>
-        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
-      </button>
 
       <div class="controls">
         <button id="btn-left" class="round-btn lg"></button>
@@ -125,6 +119,17 @@
 
   <div id="sheet" class="sheet" hidden>
     <div id="sheet-panel" class="sheet-panel" role="dialog" aria-modal="true"></div>
+  </div>
+
+  <!-- Conferma dentro l'app (sopra a tutto, anche ai pannelli) -->
+  <div id="ask" class="ask" hidden>
+    <div class="ask-panel" role="alertdialog" aria-modal="true" aria-labelledby="ask-text">
+      <p id="ask-text"></p>
+      <div class="row">
+        <button id="ask-no" class="btn">Annulla</button>
+        <button id="ask-yes" class="btn primary">OK</button>
+      </div>
+    </div>
   </div>
 
   <script type="module" src="js/app.js"></script>
