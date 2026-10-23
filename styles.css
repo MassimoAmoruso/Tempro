@@ -277,3 +277,50 @@ table.serie { width: 100%; border-collapse: collapse; font-size: 15px; font-vari
 table.serie th, table.serie td { padding: 8px 4px; border-bottom: 1px solid var(--line); text-align: right; }
 table.serie th:first-child, table.serie td:first-child { text-align: left; }
 table.serie th { color: var(--muted); font-weight: 600; }
+
+/* --- Telefono in orizzontale ------------------------------------------ */
+/* Anello a sinistra (dimensionato sull'altezza), riquadri e comandi a destra. */
+@media (orientation: landscape) and (max-height: 560px) {
+  :root { --top-pad: calc(env(safe-area-inset-top) + 8px); }
+  .timer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto auto 1fr auto auto;
+    grid-template-areas: "top top" "run run" "dial stats" "dial ex" "dial controls";
+    column-gap: 24px; row-gap: 8px;
+    padding: var(--top-pad) max(20px, env(safe-area-inset-right)) 8px max(20px, env(safe-area-inset-left));
+  }
+  .topbar { grid-area: top; }
+  .run-bar { grid-area: run; }
+  .dial { grid-area: dial; justify-content: center; gap: 6px; }
+  .stats { grid-area: stats; align-self: end; }
+  .exercise { grid-area: ex; }
+  .controls { grid-area: controls; gap: 22px; }
+  .pill { padding: 4px 12px; font-size: 12px; }
+  .ring { width: min(60svh, 44vw); width: min(60vh, 44vw); }
+  @supports (height: 1svh) { .ring { width: min(60svh, 44vw); } }
+  #phase-time { font-size: min(14vh, 9vw); }
+  #phase-time.long { font-size: min(9vh, 6vw); }
+  #phase-sub { font-size: 13px; }
+  .stat { padding: 8px 12px; }
+  .stat-v { font-size: 20px; }
+  .exercise { padding: 6px; }
+  .ex-thumb { width: 40px; height: 40px; }
+  .main-btn { width: 72px; height: 72px; }
+  .main-btn svg { width: 28px; height: 28px; }
+  .round-btn.lg { width: 52px; height: 52px; }
+  .tabbar {
+    margin: 0 max(20px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 6px) max(20px, env(safe-area-inset-left));
+    padding: 4px;
+  }
+  .tab { flex-direction: row; justify-content: center; gap: 6px; padding: 6px 0; }
+  .tab svg { width: 18px; height: 18px; }
+  .sessions {
+    padding: calc(env(safe-area-inset-top) + 12px) max(20px, env(safe-area-inset-right)) 20px max(20px, env(safe-area-inset-left));
+  }
+  .cam-mini { top: calc(var(--top-pad) + 52px); right: max(16px, env(safe-area-inset-right)); width: 60px; height: 80px; }
+  .sheet-panel { max-width: 640px; margin: 0 auto; max-height: 94dvh; }
+  .camera { flex-direction: row; }
+  .camera video { flex: 1; height: 100%; }
+  .cam-bar { width: 340px; margin: 0; border-radius: 0; overflow-y: auto; padding: 16px max(16px, env(safe-area-inset-right)) 16px 16px; }
+}

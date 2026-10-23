@@ -65,7 +65,7 @@ const amount = (t, n) => (inSec(t) ? fmtShort(n) : String(n));
 const signed = (t, n) => (n > 0 ? '+' : n < 0 ? '−' : '') + amount(t, Math.abs(n));
 
 const RING = 2 * Math.PI * 136;   // circonferenza dell'anello (r=136 nel viewBox 300)
-const APP_VERSION = '9';          // da aggiornare insieme a VERSION in sw.js
+const APP_VERSION = '10';          // da aggiornare insieme a VERSION in sw.js
 
 let settings = db.getSettings();
 let mode;            // 'round' | 'tempo' | 'cronometro' | 'sessioni' | 'andamento'
