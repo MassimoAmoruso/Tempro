@@ -277,6 +277,8 @@ table.serie { width: 100%; border-collapse: collapse; font-size: 15px; font-vari
 table.serie th, table.serie td { padding: 8px 4px; border-bottom: 1px solid var(--line); text-align: right; }
 table.serie th:first-child, table.serie td:first-child { text-align: left; }
 table.serie th { color: var(--muted); font-weight: 600; }
+table.serie tr.tap { cursor: pointer; }
+table.serie tr.tap:active td { background: var(--card2); }
 
 /* --- Telefono in orizzontale ------------------------------------------ */
 /* Anello a sinistra (dimensionato sull'altezza), riquadri e comandi a destra. */

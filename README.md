@@ -37,6 +37,7 @@ Nel modello si sceglie **Obiettivo in: Ripetizioni / Secondi**. In secondi (es. 
 - A fine allenamento il risultato viene salvato nello **storico** (solo sul telefono) e si apre **Com'è andata?** (fatica 1–10, ripetizioni, nota; facoltativi).
 - **Salva e invia al coach** prepara un messaggio con il riepilogo e un link; **Andamento → Invia al coach** invia tutti i risultati di una scheda.
 - Pagina **Andamento**: allenamenti della settimana/mese, giorni di fila, grafico per ogni allenamento, elenco delle sessioni.
+- Toccando una sessione in **Tutte le sessioni** si apre il **dettaglio** (serie con durata e minuto, giri, round, fatica e nota), con Modifica valutazione, Invia al coach ed Elimina. Orari delle serie e tempi dei giri sono salvati dalla versione 11.
 - **Lato coach**: aprendo il link dei risultati (o incollandolo) i dati finiscono in **Andamento → Atleti**, divisi per atleta; i doppioni vengono ignorati.
 - Il nome dell'atleta è facoltativo (Impostazioni → Coach).
 

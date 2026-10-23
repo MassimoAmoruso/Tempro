@@ -82,6 +82,10 @@ export function cleanResult(r) {
     fatte: num(r.fatte, 1e6), obiettivo: num(r.obiettivo, 1e6), tempoTotale: num(r.tempoTotale, 86400),
     raggiuntoAl: num(r.raggiuntoAl, 86400),
     serie: Array.isArray(r.serie) ? r.serie.slice(0, 500).map(x => clampInt(x, 0, 1e5)) : null,
+    // Inizio e fine di ogni serie (secondi dall'avvio), tempi di ogni giro (decimi).
+    serieInizio: Array.isArray(r.serieInizio) ? r.serieInizio.slice(0, 500).map(x => clampInt(x, 0, 86400)) : null,
+    serieFine: Array.isArray(r.serieFine) ? r.serieFine.slice(0, 500).map(x => clampInt(x, 0, 86400)) : null,
+    giriTempi: Array.isArray(r.giriTempi) ? r.giriTempi.slice(0, 500).map(x => Math.min(86400, Math.max(0, Math.round((Number(x) || 0) * 10) / 10))) : null,
     roundFatti: num(r.roundFatti, 1e4), roundTotali: num(r.roundTotali, 1e4), lavoroSec: num(r.lavoroSec, 172800),
     durataSec: num(r.durataSec, 172800), giri: num(r.giri, 1e4),
     giroMigliore: r.giroMigliore == null ? null : Math.min(86400, Math.max(0, Math.round((Number(r.giroMigliore) || 0) * 10) / 10)),

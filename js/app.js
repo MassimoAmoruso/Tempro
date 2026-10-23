@@ -65,7 +65,7 @@ const amount = (t, n) => (inSec(t) ? fmtShort(n) : String(n));
 const signed = (t, n) => (n > 0 ? '+' : n < 0 ? '−' : '') + amount(t, Math.abs(n));
 
 const RING = 2 * Math.PI * 136;   // circonferenza dell'anello (r=136 nel viewBox 300)
-const APP_VERSION = '10';          // da aggiornare insieme a VERSION in sw.js
+const APP_VERSION = '11';          // da aggiornare insieme a VERSION in sw.js
 
 let settings = db.getSettings();
 let mode;            // 'round' | 'tempo' | 'cronometro' | 'sessioni' | 'andamento'
@@ -459,6 +459,7 @@ function buildResult(r, completo) {
     return {
       ...res, unita: inSec(t) ? 'secondi' : null, fatte: r.totale, obiettivo: t.obiettivo, tempoTotale: t.tempoTotale,
       raggiuntoAl: r.obiettivoRaggiuntoAl(), serie: r.serie.map(s => s.reps ?? 0),
+      serieInizio: r.serie.map(s => Math.round(s.inizio)), serieFine: r.serie.map(s => Math.round(s.fine)),
     };
   }
   const el = Math.min(r.clock.ms / 1000, r.total);
@@ -473,13 +474,15 @@ function buildResult(r, completo) {
       }
       start = end;
     });
-    return { ...res, roundFatti: fatti, roundTotali: totali, lavoroSec: Math.round(lavoro) };
+    const prepR = r.phases[0]?.type === 'prepara' ? r.phases[0].duration : 0;
+    return { ...res, roundFatti: fatti, roundTotali: totali, lavoroSec: Math.round(lavoro), durataSec: Math.round(Math.max(0, el - prepR)) };
   }
   const prep = r.phases[0].type === 'prepara' ? r.phases[0].duration : 0;
   const durs = laps.map((x, i) => x - (laps[i - 1] ?? 0));
   return {
     ...res, durataSec: Math.round(Math.max(0, el - prep)), giri: durs.length || null,
     giroMigliore: durs.length ? Math.round(Math.min(...durs) * 10) / 10 : null,
+    giriTempi: durs.map(d => Math.round(d * 10) / 10),
   };
 }
 
@@ -530,15 +533,15 @@ function openFeedback(ids, schedaNome = '') {
     <h2>Com'è andata?</h2>
     ${intro}
     <h3>Fatica (1 = facile, 10 = al limite)</h3>
-    <div class="scale">${Array.from({ length: 10 }, (_, i) => `<button class="btn" data-f="${i + 1}" aria-pressed="false">${i + 1}</button>`).join('')}</div>
-    ${askReps ? '<label class="field"><span>Ripetizioni totali (se le hai contate)</span><input type="number" inputmode="numeric" min="0" name="rip"></label>' : ''}
-    <label class="field"><span>Nota</span><input type="text" name="nota" maxlength="200" placeholder="Facoltativa"></label>
+    <div class="scale">${Array.from({ length: 10 }, (_, i) => `<button class="btn" data-f="${i + 1}" aria-pressed="${one?.fatica === i + 1}">${i + 1}</button>`).join('')}</div>
+    ${askReps ? `<label class="field"><span>Ripetizioni totali (se le hai contate)</span><input type="number" inputmode="numeric" min="0" name="rip" value="${one.ripetizioni ?? ''}"></label>` : ''}
+    <label class="field"><span>Nota</span><input type="text" name="nota" maxlength="200" placeholder="Facoltativa" value="${esc(one?.nota ?? '')}"></label>
     <div class="row">
       <button class="btn" data-act="skip">Salta</button>
       <button class="btn${fromCoach ? '' : ' primary'}" data-act="save">Salva</button>
     </div>
     <button class="btn block${fromCoach ? ' primary' : ''}" data-act="coach">Salva e invia al coach</button>`, panel => {
-    let fatica = null;
+    let fatica = one?.fatica ?? null;
     panel.querySelectorAll('[data-f]').forEach(b => {
       b.onclick = () => {
         fatica = Number(b.dataset.f);
@@ -548,12 +551,14 @@ function openFeedback(ids, schedaNome = '') {
     const save = () => {
       const rip = panel.querySelector('[name=rip]')?.value;
       const nota = panel.querySelector('[name=nota]').value.trim();
-      return list.map(res => {
+      const out = list.map(res => {
         const extra = askReps ? { ripetizioni: rip === '' || rip == null ? null : rip } : {};
         const upd = db.cleanResult({ ...res, fatica, nota, ...extra });
         if (upd) try { db.saveResult(upd); } catch { /* non critico */ }
         return upd ?? res;
       });
+      if (mode === 'andamento') renderReport();
+      return out;
     };
     panel.querySelector('[data-act=skip]').onclick = closeSheet;
     panel.querySelector('[data-act=save]').onclick = () => { save(); closeSheet(); };
@@ -1616,7 +1621,7 @@ function openDetail(key, own) {
   const s = seriesFor(results);
   const rows = results.map(r => {
     const p = s.points.find(x => x.r === r);
-    return `<tr><td>${esc(dateTimeLabel(r.data))}${r.nota ? `<br><small class="sum">${esc(r.nota)}</small>` : ''}</td>
+    return `<tr class="tap" data-sess="${esc(r.id)}"><td>${esc(dateTimeLabel(r.data))}${r.nota ? `<br><small class="sum">${esc(r.nota)}</small>` : ''}</td>
       <td>${p ? esc(formatValue(s, p.y)) : '–'}${r.completo ? '' : '<br><small class="sum">interrotto</small>'}</td>
       <td>${r.fatica ?? '–'}</td>
       ${own ? `<td><button class="btn small danger" data-del="${esc(r.id)}" aria-label="Elimina sessione">✕</button></td>` : ''}</tr>`;
@@ -1626,9 +1631,16 @@ function openDetail(key, own) {
     <h4 class="chart-title">${esc(s.name)}</h4>
     ${chartSvg(s)}
     <h3>Sessioni</h3>
+    <p>Tocca una sessione per vederne il dettaglio.</p>
     <table class="serie"><tr><th>Data</th><th>${esc(s.name)}</th><th>Fatica</th>${own ? '<th></th>' : ''}</tr>${rows}</table>
     ${own ? `<button class="btn block" data-act="send-model">Invia al coach</button>` : ''}
     <button class="btn block primary" data-act="close">Chiudi</button>`, panel => {
+    panel.querySelectorAll('tr[data-sess]').forEach(tr => {
+      tr.onclick = e => {
+        if (e.target.closest('[data-del]')) return;
+        openSession(tr.dataset.sess, own, () => openDetail(key, own));
+      };
+    });
     panel.querySelectorAll('[data-del]').forEach(b => {
       b.onclick = () => {
         if (!confirm('Eliminare questa sessione dallo storico?')) return;
@@ -1640,6 +1652,72 @@ function openDetail(key, own) {
     });
     const send = panel.querySelector('[data-act=send-model]');
     if (send) send.onclick = () => { closeSheet(); sendToCoach(results.slice().reverse()); };
+  });
+}
+
+// Dettaglio di una singola sessione, come a fine allenamento.
+function openSession(id, own, back) {
+  const r = reportResults().find(x => x.id === id);
+  if (!r) return;
+  const u = { unita: r.unita };
+  const kv = (k, v) => `<div class="kv"><span>${k}</span><b>${v}</b></div>`;
+  let body = '';
+  if (r.tipo === 'tempo') {
+    const diff = (r.fatte ?? 0) - (r.obiettivo ?? 0);
+    const serie = r.serie ?? [];
+    const timed = r.serieFine?.length === serie.length && r.serieInizio?.length === serie.length;
+    const mean = serie.length ? (r.fatte ?? 0) / serie.length : 0;
+    body = `<div class="result ${diff >= 0 ? 'ok' : 'ko'}">${diff > 0 ? `${signed(u, diff)} oltre l'obiettivo` : diff === 0 ? 'Obiettivo centrato' : `${amount(u, -diff)} in meno`}</div>
+      ${kv(inSec(u) ? 'Tempo di esercizio' : 'Esecuzioni fatte', amount(u, r.fatte ?? 0))}
+      ${kv('Obiettivo', `${amount(u, r.obiettivo ?? 0)} in ${fmt(r.tempoTotale ?? 0)}`)}
+      ${r.raggiuntoAl != null ? kv('Obiettivo raggiunto a', fmt(r.raggiuntoAl)) : ''}
+      ${kv('Serie', serie.length)}
+      ${kv('Media per serie', inSec(u) ? fmtShort(mean) : mean.toFixed(1).replace('.', ','))}
+      ${serie.length ? `<h3>Serie</h3><table class="serie"><tr><th>Serie</th><th>${inSec(u) ? 'Tenuti' : 'Esecuzioni'}</th>${timed ? '<th>Durata</th><th>Al minuto</th>' : ''}</tr>
+        ${serie.map((n, i) => `<tr><td>${i + 1}</td><td>${amount(u, n)}</td>${timed ? `<td>${fmt(r.serieFine[i] - r.serieInizio[i])}</td><td>${fmt(r.serieFine[i])}</td>` : ''}</tr>`).join('')}</table>
+        ${timed ? '' : '<p>Orari delle serie non disponibili per le sessioni registrate prima della versione 11.</p>'}` : ''}`;
+  } else if (r.tipo === 'round') {
+    body = `${kv('Round completati', `${r.roundFatti ?? 0} su ${r.roundTotali ?? 0}`)}
+      ${kv('Lavoro effettivo', fmtShort(r.lavoroSec ?? 0))}
+      ${r.durataSec != null ? kv('Durata totale', fmt(r.durataSec)) : ''}
+      ${r.ripetizioni != null ? kv('Ripetizioni', r.ripetizioni) : ''}`;
+  } else {
+    const giri = r.giriTempi ?? [];
+    body = `${kv('Durata', fmt(r.durataSec ?? 0))}
+      ${r.giri ? kv('Giri', r.giri) : ''}
+      ${r.giroMigliore != null ? kv('Giro migliore', fmtTenths(r.giroMigliore)) : ''}
+      ${r.ripetizioni != null ? kv('Ripetizioni', r.ripetizioni) : ''}
+      ${giri.length ? `<h3>Giri</h3><table class="serie"><tr><th>Giro</th><th>Tempo giro</th><th>Totale</th></tr>
+        ${giri.map((g, i) => `<tr><td>${i + 1}</td><td>${fmtTenths(g)}</td><td>${fmtTenths(giri.slice(0, i + 1).reduce((a, b) => a + b, 0))}</td></tr>`).join('')}</table>` : ''}`;
+  }
+  openSheet('session', `
+    <h2>${esc(r.nome)}</h2>
+    <p>${esc(dateTimeLabel(r.data))} · ${esc(db.TYPES[r.tipo].nome)}${r.schedaNome ? ` · scheda ${esc(r.schedaNome)}` : ''} · ${r.completo ? 'completato' : 'interrotto'}${r.atleta ? ` · ${esc(r.atleta)}` : ''}</p>
+    ${body}
+    <h3>Valutazione</h3>
+    ${kv('Fatica', r.fatica ? `${r.fatica}/10` : '–')}
+    ${r.nota ? `<p class="nota">${esc(r.nota)}</p>` : ''}
+    ${own ? `<div class="row">
+        <button class="btn" data-act="rate">Modifica valutazione</button>
+        <button class="btn" data-act="send">Invia al coach</button>
+      </div>
+      <button class="btn block danger" data-act="del">Elimina sessione</button>` : ''}
+    <div class="row">
+      ${back ? '<button class="btn" data-act="back">Indietro</button>' : ''}
+      <button class="btn primary" data-act="close">Chiudi</button>
+    </div>`, panel => {
+    const b = sel => panel.querySelector(sel);
+    if (back) b('[data-act=back]').onclick = () => { closeSheet(); back(); };
+    if (!own) return;
+    b('[data-act=rate]').onclick = () => { closeSheet(); openFeedback([r.id]); };
+    b('[data-act=send]').onclick = () => { closeSheet(); sendToCoach([r]); };
+    b('[data-act=del]').onclick = () => {
+      if (!confirm('Eliminare questa sessione dallo storico?')) return;
+      db.deleteResult(r.id);
+      closeSheet();
+      renderReport();
+      back?.();
+    };
   });
 }
 
