@@ -4,6 +4,7 @@ import { fmt, fmtShort, fmtTenths } from './engine.js';
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+export const kgLabel = kg => `${String(kg).replace('.', ',')} kg`;
 export const dateLabel = iso => new Date(iso).toLocaleDateString('it-IT', { day: 'numeric', month: 'short' });
 export const dateTimeLabel = iso => new Date(iso).toLocaleString('it-IT', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
@@ -65,7 +66,7 @@ export function chartSvg(s, { w = 320, h = 132 } = {}) {
   const line = pts.length > 1 ? `<polyline class="line" points="${pts.map((p, i) => `${x(i).toFixed(1)},${y(p.y).toFixed(1)}`).join(' ')}"/>` : '';
   const slot = pts.length > 1 ? (w - L - R) / (pts.length - 1) : w;
   const dots = pts.map((p, i) => {
-    const tip = `${dateTimeLabel(p.r.data)} · ${s.name}: ${formatValue(s, p.y)}${p.r.fatica ? ` · fatica ${p.r.fatica}/10` : ''}`;
+    const tip = `${dateTimeLabel(p.r.data)} · ${s.name}: ${formatValue(s, p.y)}${p.r.peso ? ` · ${kgLabel(p.r.peso)}` : ''}${p.r.fatica ? ` · fatica ${p.r.fatica}/10` : ''}`;
     return `<circle class="dot" cx="${x(i).toFixed(1)}" cy="${y(p.y).toFixed(1)}" r="4"/>
       <rect class="hit" x="${(x(i) - Math.max(12, slot / 2)).toFixed(1)}" y="0" width="${Math.max(24, slot).toFixed(1)}" height="${h}" data-tip="${esc(tip)}"><title>${esc(tip)}</title></rect>`;
   }).join('');
@@ -99,6 +100,7 @@ export function resultLine(r) {
     if (r.giri) s += `, ${r.giri} giri${r.giroMigliore != null ? ` (migliore ${fmtTenths(r.giroMigliore)})` : ''}`;
     if (r.ripetizioni != null) s += `, ${r.ripetizioni} ripetizioni`;
   }
+  if (r.peso) s += ` · ${kgLabel(r.peso)}`;
   if (!r.completo) s += ' (interrotto)';
   if (r.fatica) s += ` · fatica ${r.fatica}/10`;
   return s;

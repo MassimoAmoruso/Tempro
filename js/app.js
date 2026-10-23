@@ -2,7 +2,7 @@ import { PHASES, Clock, fmt, fmtShort, fmtTenths, buildRoundPhases, buildCronoPh
 import * as db from './storage.js';
 import { WorkRecorder, cameraSupported, videoStore } from './recorder.js';
 import { encodeLink, decodeLink, isIosBrowser } from './share.js';
-import { seriesFor, chartSvg, formatValue, resultLine, coachMessage, stats, groupResults, dateLabel, dateTimeLabel } from './report.js';
+import { seriesFor, chartSvg, formatValue, resultLine, coachMessage, stats, groupResults, dateLabel, dateTimeLabel, kgLabel } from './report.js';
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -65,7 +65,7 @@ const amount = (t, n) => (inSec(t) ? fmtShort(n) : String(n));
 const signed = (t, n) => (n > 0 ? '+' : n < 0 ? '−' : '') + amount(t, Math.abs(n));
 
 const RING = 2 * Math.PI * 136;   // circonferenza dell'anello (r=136 nel viewBox 300)
-const APP_VERSION = '11';          // da aggiornare insieme a VERSION in sw.js
+const APP_VERSION = '12';          // da aggiornare insieme a VERSION in sw.js
 
 let settings = db.getSettings();
 let mode;            // 'round' | 'tempo' | 'cronometro' | 'sessioni' | 'andamento'
@@ -454,6 +454,7 @@ function buildResult(r, completo) {
   const res = {
     id: r.resultId ??= db.uid(), data: r.startedAt ?? new Date().toISOString(), tipo: t.tipo,
     modello: db.templateKey(t), nome: t.nome, scheda: sch?.id ?? null, schedaNome: sch?.nome ?? '', completo,
+    peso: t.peso || null,
   };
   if (t.tipo === 'tempo') {
     return {
@@ -535,6 +536,7 @@ function openFeedback(ids, schedaNome = '') {
     <h3>Fatica (1 = facile, 10 = al limite)</h3>
     <div class="scale">${Array.from({ length: 10 }, (_, i) => `<button class="btn" data-f="${i + 1}" aria-pressed="${one?.fatica === i + 1}">${i + 1}</button>`).join('')}</div>
     ${askReps ? `<label class="field"><span>Ripetizioni totali (se le hai contate)</span><input type="number" inputmode="numeric" min="0" name="rip" value="${one.ripetizioni ?? ''}"></label>` : ''}
+    ${one ? `<label class="field"><span>Peso usato (kg)</span><input type="number" inputmode="decimal" min="0" step="0.5" name="peso" value="${one.peso ?? ''}" placeholder="Facoltativo"></label>` : ''}
     <label class="field"><span>Nota</span><input type="text" name="nota" maxlength="200" placeholder="Facoltativa" value="${esc(one?.nota ?? '')}"></label>
     <div class="row">
       <button class="btn" data-act="skip">Salta</button>
@@ -551,8 +553,10 @@ function openFeedback(ids, schedaNome = '') {
     const save = () => {
       const rip = panel.querySelector('[name=rip]')?.value;
       const nota = panel.querySelector('[name=nota]').value.trim();
+      const peso = panel.querySelector('[name=peso]');
       const out = list.map(res => {
         const extra = askReps ? { ripetizioni: rip === '' || rip == null ? null : rip } : {};
+        if (peso) extra.peso = peso.value;
         const upd = db.cleanResult({ ...res, fatica, nota, ...extra });
         if (upd) try { db.saveResult(upd); } catch { /* non critico */ }
         return upd ?? res;
@@ -792,7 +796,7 @@ function render() {
     setText('run-text', `${schedaRun.scheda.nome} · ${i + 1} di ${n}${next ? ` · poi: ${next.nome}` : ' · ultimo'}`);
   }
   setPhase(v.type);
-  setText('tpl-name', tpl.nome);
+  setText('tpl-name', tpl.peso ? `${tpl.nome} · ${kgLabel(tpl.peso)}` : tpl.nome);
   setText('total-time', v.total);
   setText('phase-label', v.name);
   setText('phase-time', v.time);
@@ -1082,6 +1086,11 @@ function goalText(t) {
 }
 
 function summary(t) {
+  const s = baseSummary(t);
+  return t.peso ? `${s} · ${kgLabel(t.peso)}` : s;
+}
+
+function baseSummary(t) {
   if (t.tipo === 'round') {
     const total = buildRoundPhases(t).reduce((a, p) => a + p.duration, 0);
     return `Lavoro ${fmtShort(t.lavoro)} · Riposo ${fmtShort(t.riposo)} · ${t.roundPerCiclo} round × ${t.cicli} ${t.cicli === 1 ? 'ciclo' : 'cicli'} · Totale ${fmt(total)}`;
@@ -1168,6 +1177,7 @@ function openEditor(t, isNew) {
     <h2>${isNew ? 'Nuovo modello' : 'Modifica'} · ${db.TYPES[t.tipo].nome}</h2>
     <form id="ed" novalidate>
       <label class="field"><span>Nome</span><input type="text" name="nome" value="${esc(t.nome)}" maxlength="40"></label>
+      <label class="field"><span>Peso da usare (kg)</span><input type="number" inputmode="decimal" min="0" step="0.5" name="peso" value="${t.peso || ''}" placeholder="Facoltativo"></label>
       ${FIELDS[t.tipo].map(f => fieldHtml(f, t)).join('')}
       <h3>Esercizio (facoltativo)</h3>
       <label class="field"><span>Link video</span><input type="url" name="video" value="${esc(t.video)}" placeholder="https://youtube.com/…"></label>
@@ -1230,6 +1240,7 @@ function openEditor(t, isNew) {
       if (immagine && !safeImg(immagine)) { err.textContent = 'Il link immagine deve iniziare con https://'; return; }
       out.video = video;
       out.immagine = immagine;
+      out.peso = db.cleanKg(fd.get('peso'));
       out.registra = fd.get('registra') === 'on';
       out.fotocamera = fd.get('fotocamera') === 'environment' ? 'environment' : 'user';
       out.audio = fd.get('audio') === 'on';
@@ -1367,7 +1378,7 @@ function openSchedaEditor(s) {
       <label class="field"><span>Coach</span><input type="text" name="coach" value="${esc(sc.coach)}" maxlength="40" placeholder="Facoltativo"></label>
       <label class="field"><span>Nota</span><input type="text" name="nota" value="${esc(sc.nota)}" maxlength="500" placeholder="Facoltativa"></label>
       <h3>Ordine di esecuzione</h3>
-      <p>Con "Avvia scheda" gli allenamenti partono uno dopo l'altro in quest'ordine; tra uno e l'altro c'è il riposo dell'allenamento appena finito.</p>
+      <p>Con "Avvia scheda" gli allenamenti partono uno dopo l'altro in quest'ordine; tra uno e l'altro c'è il riposo dell'allenamento appena finito. Trascina la maniglia ≡ per riordinare.</p>
       <div id="sch-order"></div>
       <h3>Allenamenti</h3>
       <p>Scegli gli allenamenti da includere. Le foto caricate dal telefono non vengono inviate; i link a immagini e video sì.</p>
@@ -1382,7 +1393,10 @@ function openSchedaEditor(s) {
     let order = sc.modelli.filter(id => personal.some(t => t.id === id));
     const drawOrder = () => {
       box.innerHTML = order.length ? order.map((id, i) => `
-        <div class="order-row">
+        <div class="order-row" data-id="${esc(id)}">
+          <span class="drag-handle" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 8h14M5 12h14M5 16h14"/></svg>
+          </span>
           <span class="order-n">${i + 1}</span>
           <span class="order-name">${esc(db.getTemplate(id).nome)}</span>
           <button type="button" class="btn small" data-move="${i}" data-d="-1" aria-label="Sposta su"${i === 0 ? ' disabled' : ''}>↑</button>
@@ -1397,6 +1411,36 @@ function openSchedaEditor(s) {
       [order[i], order[j]] = [order[j], order[i]];
       drawOrder();
     };
+    // Trascinamento dalla maniglia ≡: la riga segue il dito e le altre si spostano al passaggio.
+    box.addEventListener('pointerdown', e => {
+      const handle = e.target.closest('.drag-handle');
+      if (!handle) return;
+      e.preventDefault();
+      const row = handle.closest('.order-row');
+      row.classList.add('dragging');
+      // Il gesto si segue su tutta la pagina: spostando la riga nel DOM la maniglia perderebbe il puntatore.
+      const move = ev => {
+        if (ev.pointerId !== e.pointerId) return;
+        ev.preventDefault();
+        const others = [...box.querySelectorAll('.order-row:not(.dragging)')];
+        const before = others.find(r => { const b = r.getBoundingClientRect(); return ev.clientY < b.top + b.height / 2; });
+        if (before) { if (row.nextElementSibling !== before) box.insertBefore(row, before); }
+        else if (box.lastElementChild !== row) box.appendChild(row);
+        box.querySelectorAll('.order-n').forEach((n, i) => { n.textContent = i + 1; });
+      };
+      const end = ev => {
+        if (ev.pointerId !== e.pointerId) return;
+        document.removeEventListener('pointermove', move);
+        document.removeEventListener('pointerup', end);
+        document.removeEventListener('pointercancel', end);
+        row.classList.remove('dragging');
+        order = [...box.querySelectorAll('.order-row')].map(r => r.dataset.id);
+        drawOrder();
+      };
+      document.addEventListener('pointermove', move, { passive: false });
+      document.addEventListener('pointerup', end);
+      document.addEventListener('pointercancel', end);
+    });
     form.querySelectorAll('[name=m]').forEach(c => {
       c.onchange = () => {
         order = c.checked ? order.concat(c.value) : order.filter(id => id !== c.value);
@@ -1694,6 +1738,7 @@ function openSession(id, own, back) {
     <h2>${esc(r.nome)}</h2>
     <p>${esc(dateTimeLabel(r.data))} · ${esc(db.TYPES[r.tipo].nome)}${r.schedaNome ? ` · scheda ${esc(r.schedaNome)}` : ''} · ${r.completo ? 'completato' : 'interrotto'}${r.atleta ? ` · ${esc(r.atleta)}` : ''}</p>
     ${body}
+    ${r.peso ? kv('Peso', kgLabel(r.peso)) : ''}
     <h3>Valutazione</h3>
     ${kv('Fatica', r.fatica ? `${r.fatica}/10` : '–')}
     ${r.nota ? `<p class="nota">${esc(r.nota)}</p>` : ''}

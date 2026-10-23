@@ -103,6 +103,13 @@ video.mirror { transform: scaleX(-1); }
 .order-n { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--card2); display: grid; place-items: center; font-size: 13px; font-weight: 700; }
 .order-name { flex: 1; min-width: 0; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .order-row .btn { width: 40px; padding: 7px 0; }
+.drag-handle {
+  flex: none; width: 36px; height: 40px; display: grid; place-items: center;
+  color: var(--muted); cursor: grab; touch-action: none; border-radius: 10px;
+}
+.drag-handle svg { width: 22px; height: 22px; }
+.order-row.dragging { background: var(--card2); border-radius: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, .45); position: relative; z-index: 1; }
+.order-row.dragging .drag-handle { color: var(--accent); cursor: grabbing; }
 
 .dial { display: flex; flex-direction: column; align-items: center; gap: 8px; min-height: 0; }
 .pill {

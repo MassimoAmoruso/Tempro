@@ -11,7 +11,7 @@ Pubblicata con GitHub Pages dal repository `MassimoAmoruso/Tempro` (file nella r
 - **Entro il tempo**: Prepara, poi il tempo totale (riposi compresi) scorre. A fine serie premi **✓**, segni le esecuzioni e parte il riposo. Allo scadere ottieni il riepilogo con la differenza rispetto all'obiettivo.
 - **Cronometro**: in avanti con giri, oppure conto alla rovescia.
 
-Per ogni tipo puoi creare più modelli (scheda **Modelli**) e associare a ciascuno un'immagine (link o foto dal telefono) e un link video, entrambi facoltativi.
+Per ogni tipo puoi creare più modelli (scheda **Modelli**) e associare a ciascuno un'immagine (link o foto dal telefono), un link video e il **peso da usare (kg)**, tutti facoltativi. Il peso compare accanto al nome durante il timer, viaggia con le schede e viene salvato con ogni sessione (in "Com'è andata?" si può indicare il peso realmente usato).
 Dalle impostazioni puoi esportare e importare i modelli come file JSON.
 
 ## Schede coach → atleta
@@ -23,7 +23,7 @@ Dalle impostazioni puoi esportare e importare i modelli come file JSON.
 
 ### Eseguire una scheda in sequenza
 
-- Nell'editor della scheda si imposta l'**ordine di esecuzione** (frecce ↑↓); per le schede ricevute vale l'ordine del coach.
+- Nell'editor della scheda si imposta l'**ordine di esecuzione** trascinando la maniglia ≡ (o con le frecce ↑↓); per le schede ricevute vale l'ordine del coach.
 - **Avvia scheda** esegue gli allenamenti uno dopo l'altro: tra uno e l'altro parte il **riposo dell'allenamento appena concluso** (il Cronometro non ha riposo), poi il successivo parte da solo senza "Prepara".
 - In alto la barra "Scheda · 2 di 4 · poi: …" con **Esci**. Il cronometro in avanti passa al successivo con il pulsante ⏭.
 - "Com'è andata?" compare una volta sola a fine scheda; con la ripresa attiva si registra un unico video di tutti i lavori.

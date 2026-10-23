@@ -45,6 +45,8 @@ const ID_RE = /^[\w-]{6,64}$/;
 const clampInt = (v, min, max) => Math.min(max, Math.max(min, Math.round(Number(v) || 0)));
 const str = (v, max) => String(v ?? '').trim().slice(0, max);
 const httpUrl = v => (/^https?:\/\//i.test(v || '') ? str(v, 500) : '');
+// Peso in kg con un decimale (accetta anche la virgola); 0 = nessun peso.
+export const cleanKg = v => Math.min(1000, Math.max(0, Math.round((Number(String(v ?? '').replace(',', '.')) || 0) * 10) / 10));
 
 const LIMITS = {
   prepara: [0, 3600], lavoro: [1, 86400], riposo: [0, 86400], roundPerCiclo: [1, 100], cicli: [1, 50],
@@ -62,6 +64,7 @@ export function cleanTemplate(m) {
   out.registra = !!m.registra;
   out.fotocamera = m.fotocamera === 'environment' ? 'environment' : 'user';
   out.audio = m.audio !== false;
+  out.peso = cleanKg(m.peso);
   for (const k of Object.keys(TYPES[m.tipo].defaults())) {
     if (k === 'direzione') out[k] = m[k] === 'indietro' ? 'indietro' : 'avanti';
     else if (k === 'unita') out[k] = m[k] === 'secondi' ? 'secondi' : 'ripetizioni';
@@ -90,6 +93,7 @@ export function cleanResult(r) {
     durataSec: num(r.durataSec, 172800), giri: num(r.giri, 1e4),
     giroMigliore: r.giroMigliore == null ? null : Math.min(86400, Math.max(0, Math.round((Number(r.giroMigliore) || 0) * 10) / 10)),
     fatica: r.fatica == null ? null : clampInt(r.fatica, 1, 10), ripetizioni: num(r.ripetizioni, 1e6), nota: str(r.nota, 200),
+    peso: cleanKg(r.peso) || null,
   };
   return compact(out);
 }
@@ -103,7 +107,7 @@ export function compact(o) {
 
 export function newTemplate(tipo, nome) {
   return {
-    id: uid(), tipo, nome: nome ?? TYPES[tipo].nome, immagine: '', video: '',
+    id: uid(), tipo, nome: nome ?? TYPES[tipo].nome, immagine: '', video: '', peso: 0,
     registra: false, fotocamera: 'user', audio: true,   // ripresa video dei lavori
     ...TYPES[tipo].defaults(),
   };
